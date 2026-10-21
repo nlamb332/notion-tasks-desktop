@@ -1,0 +1,25 @@
+node_modules/
+dist/
+dist-electron/
+release/
+*.log
+.env*
+.cache/
+!.env.example
+
+# Local project notes and runtime/user data never belong in the repository.
+IMPLEMENTATION.md
+state.json
+notion-token.enc
+user-data/
+userdata/
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.dmp
+.aws/
+.codex/
+.agents/

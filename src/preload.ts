@@ -1,0 +1,67 @@
+import { contextBridge, ipcRenderer } from "electron";
+import type { AppState, DesktopAPI, SourceConfig, Task, TaskChanges, TaskDate, UpdateResult } from "./shared/types";
+
+const channels = {
+  getState: "desktop:get-state",
+  connect: "desktop:connect",
+  disconnect: "desktop:disconnect",
+  resolveSource: "desktop:resolve-source",
+  saveSource: "desktop:save-source",
+  removeSource: "desktop:remove-source",
+  refresh: "desktop:refresh",
+  createTask: "desktop:create-task",
+  updateTask: "desktop:update-task",
+  toggleStar: "desktop:toggle-star",
+  setSettings: "desktop:set-settings",
+  openNotion: "desktop:open-notion",
+  state: "desktop:state",
+} as const;
+
+function ensureString(value: unknown, name: string): string {
+  if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
+  return value;
+}
+
+function ensureTaskDate(value: unknown): TaskDate | undefined {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value !== "object" || value === null || typeof (value as { start?: unknown }).start !== "string") throw new TypeError("due is invalid");
+  const date = value as { start: string; end?: unknown; time_zone?: unknown };
+  if (date.end !== undefined && date.end !== null && typeof date.end !== "string") throw new TypeError("due.end is invalid");
+  if (date.time_zone !== undefined && date.time_zone !== null && typeof date.time_zone !== "string") throw new TypeError("due.time_zone is invalid");
+  return { start: date.start, end: date.end === undefined ? null : date.end as string | null, ...(date.time_zone === undefined ? {} : { time_zone: date.time_zone as string | null }) };
+}
+
+function ensureChanges(value: unknown): TaskChanges {
+  if (typeof value !== "object" || value === null) throw new TypeError("changes is invalid");
+  const input = value as Record<string, unknown>;
+  const changes: TaskChanges = {};
+  if (input.name !== undefined) changes.name = ensureString(input.name, "name");
+  if (input.status !== undefined) changes.status = ensureString(input.status, "status");
+  if (input.due !== undefined) changes.due = ensureTaskDate(input.due) as TaskDate;
+  return changes;
+}
+
+const desktop: DesktopAPI = {
+  getState: () => ipcRenderer.invoke(channels.getState),
+  connect: (token) => ipcRenderer.invoke(channels.connect, ensureString(token, "token")),
+  disconnect: () => ipcRenderer.invoke(channels.disconnect),
+  resolveSource: (url) => ipcRenderer.invoke(channels.resolveSource, ensureString(url, "url")),
+  saveSource: (source: SourceConfig) => ipcRenderer.invoke(channels.saveSource, source),
+  removeSource: (id) => ipcRenderer.invoke(channels.removeSource, ensureString(id, "id")),
+  refresh: () => ipcRenderer.invoke(channels.refresh),
+  createTask: (sourceId, name, due) => ipcRenderer.invoke(channels.createTask, { sourceId: ensureString(sourceId, "sourceId"), name: ensureString(name, "name"), due: ensureTaskDate(due) }),
+  updateTask: (id, changes, expected: Task) => ipcRenderer.invoke(channels.updateTask, { id: ensureString(id, "id"), changes: ensureChanges(changes), expected }),
+  toggleStar: (id) => ipcRenderer.invoke(channels.toggleStar, ensureString(id, "id")),
+  setSettings: (settings) => ipcRenderer.invoke(channels.setSettings, settings),
+  openNotion: (id) => ipcRenderer.invoke(channels.openNotion, ensureString(id, "id")),
+  onState: (callback) => {
+    if (typeof callback !== "function") throw new TypeError("callback must be a function");
+    const listener = (_event: Electron.IpcRendererEvent, state: AppState) => callback(state);
+    ipcRenderer.on(channels.state, listener);
+    return () => ipcRenderer.removeListener(channels.state, listener);
+  },
+};
+
+contextBridge.exposeInMainWorld("desktop", desktop);
+

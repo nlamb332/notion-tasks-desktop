@@ -1,0 +1,33 @@
+import { _electron as electron } from '@playwright/test';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
+import path from 'node:path';
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+const dev = process.argv.includes('--dev');
+const server = dev ? await createServer() : null;
+if(server) await server.listen();
+const root=process.cwd();
+await mkdir(path.join(root,'.cache'),{recursive:true});
+const data=await mkdtemp(path.join(root,'.cache','smoke-'));
+const app=await electron.launch({args:['.'],env:{...process.env,NOTION_TASKS_USER_DATA:data,...(dev?{VITE_DEV_SERVER_URL:'http://127.0.0.1:5173'}:{})},timeout:30000});
+try {
+ const page=await app.firstWindow();
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.waitForFunction(()=>!!window.desktop);
+ const state=await page.evaluate(()=>window.desktop.getState());
+ assert.equal(state.connected,false);assert.equal(state.tasks.length,0);
+ if (!await page.getByRole('heading',{name:/connect notion to get started/i}).count()) await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await page.getByRole('heading',{name:/connect/i}).first().waitFor({timeout:10000});
+ await page.screenshot({path:path.join(root,'.cache','onboarding.png')});
+ await page.evaluate(()=>window.desktop.setSettings({compact:true,alwaysOnTop:true}));
+ const compact=await page.evaluate(()=>window.desktop.getState());
+ assert.equal(compact.settings.compact,true);assert.equal(compact.settings.alwaysOnTop,true);
+ const windowInfo=await app.evaluate(({BrowserWindow})=>{const win=BrowserWindow.getAllWindows()[0];return {bounds:win.getBounds(),pinned:win.isAlwaysOnTop(),prefs:win.webContents.getLastWebPreferences()};});
+ assert.equal(windowInfo.pinned,true);assert.equal(windowInfo.prefs.sandbox,true);assert.equal(windowInfo.prefs.contextIsolation,true);assert.equal(windowInfo.prefs.nodeIntegration,false);
+ await page.evaluate(()=>window.desktop.setSettings({compact:false,alwaysOnTop:false}));
+ await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
+ assert.equal(await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].isVisible()),false);
+ await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].show());
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({result:'PASS',checks:['renderer bridge','disconnected onboarding','compact mode state','always on top','sandboxed renderer','close hides window'],data,screenshot:'.cache/onboarding.png',windowInfo},null,2));
+} finally {await app.close();await server?.close();}
