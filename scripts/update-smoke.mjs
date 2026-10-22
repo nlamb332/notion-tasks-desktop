@@ -27,7 +27,7 @@ try {
   await installed.evaluate(({ app }) => {
     Object.defineProperty(app, 'isPackaged', { configurable: true, value: true });
     const updater = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json')('electron-updater').autoUpdater;
-    globalThis.__updateFixture = { installs: 0, checks: 0 };
+    globalThis.__updateFixture = { installs: 0, checks: 0, failInstall: true };
     updater.checkForUpdates = async () => {
       globalThis.__updateFixture.checks++;
       updater.emit('update-available', { version: '0.2.0' });
@@ -38,7 +38,11 @@ try {
       updater.emit('update-downloaded', { version: '0.2.0' });
       return [];
     };
-    updater.quitAndInstall = () => { globalThis.__updateFixture.installs++; };
+    updater.quitAndInstall = () => {
+      const fixture = globalThis.__updateFixture;
+      fixture.installs++;
+      if (fixture.failInstall) updater.emit('error', new Error('Fixture installer failed'));
+    };
   });
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
   await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
@@ -51,5 +55,16 @@ try {
   assert.equal(await installed.evaluate(() => globalThis.__updateFixture.installs), 0);
   await page.getByRole('button', { name: 'Restart and install', exact: true }).click();
   await expect.poll(() => installed.evaluate(() => globalThis.__updateFixture.installs)).toBe(1);
-  console.log(JSON.stringify({ result: 'PASS', checks: ['development gate', 'version display', 'check releases', 'download opt-in', 'restart opt-in', 'light/dark layouts'] }));
+  await expect(page.getByText('Could not update. Check your internet connection and try checking again.')).toBeVisible();
+  await installed.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+  assert.equal(await installed.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false);
+  await installed.evaluate(({ BrowserWindow }) => {
+    globalThis.__updateFixture.failInstall = false;
+    BrowserWindow.getAllWindows()[0].show();
+  });
+  await page.getByRole('button', { name: 'Check for updates', exact: true }).click();
+  await page.getByRole('button', { name: 'Download update', exact: true }).click();
+  await page.getByRole('button', { name: 'Restart and install', exact: true }).click();
+  await expect.poll(() => installed.evaluate(() => globalThis.__updateFixture.installs)).toBe(2);
+  console.log(JSON.stringify({ result: 'PASS', checks: ['development gate', 'version display', 'check releases', 'download opt-in', 'restart opt-in', 'install failure retains close-to-tray', 'retry installation', 'light/dark layouts'] }));
 } finally { await installed.close(); }

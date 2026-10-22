@@ -15,11 +15,30 @@ function setup(supported = true) {
   });
   const notify = vi.fn();
   const prepare = vi.fn();
+  const cancel = vi.fn();
   const loader = vi.fn(async () => engine as any);
-  return { engine, notify, prepare, loader, controller: new UpdateController('0.1.4', supported, loader, notify, prepare) };
+  return { engine, notify, prepare, cancel, loader, controller: new UpdateController('0.1.4', supported, loader, notify, prepare, cancel) };
 }
 
 describe('desktop updates', () => {
+  it.each(['throw', 'event'])('restores normal window behavior when installation fails via %s', async mode => {
+    const s = setup();
+    await s.controller.check(); await s.controller.download();
+    s.engine.quitAndInstall.mockImplementationOnce(() => {
+      if (mode === 'throw') throw new Error('Installer failed');
+      s.engine.emit('error', new Error('Installer failed'));
+    });
+    await s.controller.install();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(s.prepare).toHaveBeenCalledTimes(1);
+    expect(s.cancel).toHaveBeenCalledTimes(1);
+    expect(s.controller.snapshot().status).toBe('error');
+    await s.controller.check(); await s.controller.download(); await s.controller.install();
+    await new Promise(resolve => setImmediate(resolve));
+    expect(s.controller.snapshot().status).toBe('installing');
+    expect(s.engine.quitAndInstall).toHaveBeenCalledTimes(2);
+  });
+
   it('does not access the feed in development mode', async () => {
     const s = setup(false);
     expect((await s.controller.check()).status).toBe('unsupported');
