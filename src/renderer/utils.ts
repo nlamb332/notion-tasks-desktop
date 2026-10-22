@@ -86,12 +86,12 @@ export function isUpcoming(task: Task, reference = new Date()): boolean {
   return !task.completed && !!due && due >= dayEnd(reference);
 }
 
-export function belongsToList(task: Task, list: ListId, stars: string[], reference = new Date()): boolean {
+export function belongsToList(task: Task, list: ListId, stars: string[], reference = new Date(), showOverdue = false): boolean {
   if (list === 'all') return !task.completed;
   if (list === 'completed') return task.completed;
   if (list === 'important') return !task.completed && stars.includes(task.id);
   if (list === 'upcoming') return isUpcoming(task, reference);
-  return !task.completed && isSameLocalDay(taskStart(task), reference);
+  return !task.completed && (isSameLocalDay(taskStart(task), reference) || (showOverdue && isOverdue(task, reference)));
 }
 
 export function formatTaskDue(task: Task, now = new Date()): { label: string; tone: 'overdue' | 'today' | 'normal' | 'empty' } {
@@ -122,10 +122,11 @@ export function filterTasks(
   query: string,
   sources: SourceConfig[],
   reference = new Date(),
+  showOverdue = false,
 ): Task[] {
   const normalizedQuery = query.trim().toLowerCase();
   return sortTasks(tasks.filter((task) => {
-    if (!belongsToList(task, list, stars, reference)) return false;
+    if (!belongsToList(task, list, stars, reference, showOverdue)) return false;
     const source = sources.find((item) => item.id === task.sourceId);
     if (filters.sourceId && task.sourceId !== filters.sourceId) return false;
     if (filters.status && task.status !== filters.status) return false;
@@ -192,10 +193,9 @@ export function displayDateTime(date: TaskDate): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: /T\d{2}:\d{2}/.test(date.start) ? 'short' : undefined }).format(parsed);
 }
 
-export function listCounts(state: Pick<AppState, 'tasks' | 'stars'>): Record<ListId, number> {
-  const reference = new Date();
+export function listCounts(state: Pick<AppState, 'tasks' | 'stars'>, showOverdue = false, reference = new Date()): Record<ListId, number> {
   return {
-    today: state.tasks.filter((task) => belongsToList(task, 'today', state.stars, reference)).length,
+    today: state.tasks.filter((task) => belongsToList(task, 'today', state.stars, reference, showOverdue)).length,
     upcoming: state.tasks.filter((task) => belongsToList(task, 'upcoming', state.stars, reference)).length,
     all: state.tasks.filter((task) => belongsToList(task, 'all', state.stars, reference)).length,
     important: state.tasks.filter((task) => belongsToList(task, 'important', state.stars, reference)).length,

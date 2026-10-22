@@ -4,6 +4,8 @@ import {
   autoMapping,
   belongsToList,
   dateInputValue,
+  filterTasks,
+  listCounts,
   sortTasks,
   taskDateFromInputs,
   taskStart,
@@ -64,6 +66,20 @@ describe('renderer date and task helpers', () => {
     expect(belongsToList(task('done', '2026-10-21', true), 'all', [], reference)).toBe(false);
     expect(belongsToList(task('done', '2026-10-21', true), 'important', ['done'], reference)).toBe(false);
     expect(belongsToList(task('done', '2026-10-21', true), 'completed', [], reference)).toBe(true);
+  });
+
+  it('optionally includes overdue tasks in Today while retaining filters and other list semantics', () => {
+    const reference = new Date(2026, 9, 21, 12);
+    const tasks = [task('today', '2026-10-21'), task('overdue', '2026-10-20'), task('future', '2026-10-22'), task('undated', null), task('done', '2026-10-20', true)];
+    const filters = { sourceId: '', status: '', from: '', to: '', important: false };
+    const ids = (list: 'today' | 'upcoming', enabled: boolean, query = '') => filterTasks(tasks, list, [], filters, query, [], reference, enabled).map(t => t.id);
+    expect(ids('today', false)).toEqual(['today']);
+    expect(ids('today', true)).toEqual(['overdue', 'today']);
+    expect(ids('today', true, 'overdue')).toEqual(['overdue']);
+    expect(ids('upcoming', true)).toEqual(ids('upcoming', false));
+    expect(filterTasks(tasks, 'today', [], { ...filters, from: '2026-10-21' }, '', [], reference, true).map(t => t.id)).toEqual(['today']);
+    expect(listCounts({ tasks, stars: [] }, false, reference).today).toBe(1);
+    expect(listCounts({ tasks, stars: [] }, true, reference).today).toBe(2);
   });
 
   it('preserves duration when a due range is moved past its original end', () => {

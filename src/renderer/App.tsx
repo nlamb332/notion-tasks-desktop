@@ -29,6 +29,7 @@ import {
   Unplug,
   X,
 } from 'lucide-react';
+import { UpdateSettings } from './UpdateSettings';
 import type { AppState, SourceCandidate, SourceConfig, Task, TaskChanges, TaskDate } from '../shared/types';
 import {
   autoMapping,
@@ -138,11 +139,11 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  const counts = useMemo(() => state ? listCounts(state) : undefined, [state]);
+  const counts = useMemo(() => state ? listCounts(state, state.settings.showOverdue) : undefined, [state]);
   const selectedTask = state?.tasks.find((task) => task.id === selectedTaskId) ?? null;
   const filteredTasks = useMemo(() => {
     if (!state || activeView === 'settings') return [];
-    return filterTasks(state.tasks, activeView, state.stars, filters, query, state.sources);
+    return filterTasks(state.tasks, activeView, state.stars, filters, query, state.sources, new Date(), state.settings.showOverdue);
   }, [activeView, filters, query, state]);
   const statusOptions = useMemo(() => {
     if (!state) return [];
@@ -151,10 +152,17 @@ function App() {
 
   async function setAppSettings(patch: Partial<AppState['settings']>) {
     if (!apiAvailable() || !state) return;
+    const previousShowOverdue = state.settings.showOverdue;
+    if (patch.showOverdue !== undefined) {
+      setState(current => current ? { ...current, settings: { ...current.settings, showOverdue: patch.showOverdue } } : current);
+    }
     try {
       const next = await window.desktop.setSettings(patch);
       setState(next);
     } catch (error) {
+      if (patch.showOverdue !== undefined) {
+        setState(current => current ? { ...current, settings: { ...current.settings, showOverdue: previousShowOverdue } } : current);
+      }
       setNotice(error instanceof Error ? error.message : 'Unable to save settings.');
     }
   }
@@ -234,6 +242,7 @@ function App() {
           onDraft={openDraft}
           onExpand={() => void setAppSettings({ compact: false })}
           onRefresh={() => void loadState('refresh')}
+          onShowOverdue={(showOverdue) => void setAppSettings({ showOverdue })}
         />
       ) : (
         <>
@@ -263,7 +272,7 @@ function App() {
               <>
                 {showFilters ? <FilterBar state={state} filters={filters} statusOptions={statusOptions} onFilters={setFilters} /> : null}
                 <QuickAdd state={state} initialSourceId={filters.sourceId || state.settings.lastSourceId || state.sources[0]?.id || ''} onDraft={openDraft} />
-                <TaskListHeader activeView={activeView} count={filteredTasks.length} />
+                <TaskListHeader activeView={activeView} count={filteredTasks.length} showOverdue={Boolean(state.settings.showOverdue)} onShowOverdue={(showOverdue) => void setAppSettings({ showOverdue })} />
                 <TaskList
                   state={state}
                   tasks={filteredTasks}
@@ -343,9 +352,13 @@ function FilterBar({ state, filters, statusOptions, onFilters }: { state: AppSta
   </div>;
 }
 
-function TaskListHeader({ activeView, count }: { activeView: ListId; count: number }) {
+function OverdueToggle({ checked, onChange }: { checked: boolean; onChange: (checked: boolean) => void }) {
+  return <label className="overdue-toggle"><input type="checkbox" role="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span>Show overdue</span></label>;
+}
+
+function TaskListHeader({ activeView, count, showOverdue, onShowOverdue }: { activeView: ListId; count: number; showOverdue: boolean; onShowOverdue: (checked: boolean) => void }) {
   const list = listDefinitions.find((item) => item.id === activeView);
-  return <div className="list-heading"><div><h2>{list?.label}</h2><span>{count} {count === 1 ? 'task' : 'tasks'}</span></div><span className="sort-note"><ArrowDownToLine size={14} /> Due date</span></div>;
+  return <div className="list-heading"><div><h2>{list?.label}</h2><span>{count} {count === 1 ? 'task' : 'tasks'}</span></div><div className="list-heading-controls">{activeView === 'today' ? <OverdueToggle checked={showOverdue} onChange={onShowOverdue} /> : null}<span className="sort-note"><ArrowDownToLine size={14} /> Due date</span></div></div>;
 }
 
 function TaskList({ state, tasks, activeView, selectedTaskId, onSelect, onToggleStar, onToggleComplete }: { state: AppState; tasks: Task[]; activeView: ListId; selectedTaskId: string | null; onSelect: (task: Task) => void; onToggleStar: (task: Task) => void; onToggleComplete: (task: Task) => void }) {
@@ -392,10 +405,11 @@ function QuickAdd({ state, initialSourceId, onDraft, compact = false }: { state:
   return <form className={`quick-add ${compact ? 'compact-quick-add' : 'full-quick-add'}`} onSubmit={submit}><Plus size={16} /><input aria-label="Quick add task" placeholder={online ? 'Add a task' : state.sources.length ? 'Source offline' : 'Connect a source to add tasks'} value={newTask} onChange={(event) => { const value = event.target.value; setNewTask(value); if (sourceId) onDraft(sourceId, value); }} onFocus={openDraft} disabled={!state.sources.length} /><select aria-label="Task source" value={sourceId} onChange={(event) => { setSourceId(event.target.value); onDraft(event.target.value, newTask); }} disabled={!state.sources.length}>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select><button className="button button-primary" type="submit" disabled={!sourceId}>{<Plus size={14} />}Add</button></form>;
 }
 
-function CompactView({ state, activeView, onView, sourceId, onSource, tasks, query, onQuery, onToggleStar, onToggleComplete, onSelect, onDraft, onExpand, onRefresh }: { state: AppState; activeView: ListId; onView: (view: ListId) => void; sourceId: string; onSource: (sourceId: string) => void; tasks: Task[]; query: string; onQuery: (value: string) => void; onToggleStar: (task: Task) => void; onToggleComplete: (task: Task) => void; onSelect: (task: Task) => void; onDraft: (sourceId: string, name: string) => void; onExpand: () => void; onRefresh: () => void }) {
+function CompactView({ state, activeView, onView, sourceId, onSource, tasks, query, onQuery, onToggleStar, onToggleComplete, onSelect, onDraft, onExpand, onRefresh, onShowOverdue }: { state: AppState; activeView: ListId; onView: (view: ListId) => void; sourceId: string; onSource: (sourceId: string) => void; tasks: Task[]; query: string; onQuery: (value: string) => void; onToggleStar: (task: Task) => void; onToggleComplete: (task: Task) => void; onSelect: (task: Task) => void; onDraft: (sourceId: string, name: string) => void; onExpand: () => void; onRefresh: () => void; onShowOverdue: (checked: boolean) => void }) {
   return <div className="compact-shell">
     <header className="compact-toolbar"><div className="brand compact-brand"><div className="brand-mark"><Check size={16} strokeWidth={3} /></div><strong>Notion Tasks</strong></div><SyncStatus state={state} onRefresh={onRefresh} /><select aria-label="Current list" value={activeView} onChange={(event) => onView(event.target.value as ListId)}>{listDefinitions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Current source" value={sourceId} onChange={(event) => onSource(event.target.value)}><option value="">All sources</option>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select><button className="icon-button" aria-label="Refresh" onClick={onRefresh}><RefreshCw size={15} /></button><button className="icon-button" aria-label="Expand Notion Tasks" onClick={onExpand}><PanelLeft size={15} /></button></header>
     <div className="compact-search"><Search size={15} /><input aria-label="Search compact tasks" placeholder="Search" value={query} onChange={(event) => onQuery(event.target.value)} /></div>
+    {activeView === 'today' ? <div className="compact-list-options"><OverdueToggle checked={Boolean(state.settings.showOverdue)} onChange={onShowOverdue} /></div> : null}
     <QuickAdd state={state} initialSourceId={sourceId || state.settings.lastSourceId || state.sources[0]?.id || ''} onDraft={onDraft} compact />
     <div className="compact-list">{tasks.map((task) => <TaskRow key={task.id} state={state} task={task} selected={false} onSelect={onSelect} onToggleStar={onToggleStar} onToggleComplete={onToggleComplete} />)}{!tasks.length ? <EmptyTaskState activeView={activeView} hasSources={state.sources.length > 0} /> : null}</div>
   </div>;
@@ -606,7 +620,7 @@ function MappingEditor({ candidate, mapping, setMapping, statusProperty, editing
 
 function PreferenceSettings({ state, onState, onNotice }: { state: AppState; onState: (state: AppState) => void; onNotice: (message: string) => void }) {
   async function update(patch: Partial<AppState['settings']>) { if (!apiAvailable()) return; try { onState(await window.desktop.setSettings(patch)); } catch (error) { onNotice(error instanceof Error ? error.message : 'Unable to save preferences.'); } }
-  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Preferences</span><h2>Shape your workspace</h2><p>These choices are stored by the desktop shell and apply to future launches.</p></div><div className="preference-list"><label className="toggle-row"><span><strong>Always on top</strong><small>Keep the task window above other apps.</small></span><input type="checkbox" checked={state.settings.alwaysOnTop} onChange={(event) => void update({ alwaysOnTop: event.target.checked })} /></label><label className="toggle-row"><span><strong>Launch at login</strong><small>Open Notion Tasks when Windows starts.</small></span><input type="checkbox" checked={state.settings.launchAtLogin} onChange={(event) => void update({ launchAtLogin: event.target.checked })} /></label><div className="theme-row"><span><strong>Appearance</strong><small>Follows the Windows light or dark theme.</small></span><span className="theme-pill">System <ChevronDown size={14} /></span></div></div></section>;
+  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Preferences</span><h2>Shape your workspace</h2><p>These choices are stored by the desktop shell and apply to future launches.</p></div><div className="preference-list"><label className="toggle-row"><span><strong>Always on top</strong><small>Keep the task window above other apps.</small></span><input type="checkbox" checked={state.settings.alwaysOnTop} onChange={(event) => void update({ alwaysOnTop: event.target.checked })} /></label><label className="toggle-row"><span><strong>Launch at login</strong><small>Open Notion Tasks when Windows starts.</small></span><input type="checkbox" checked={state.settings.launchAtLogin} onChange={(event) => void update({ launchAtLogin: event.target.checked })} /></label><div className="theme-row"><span><strong>Appearance</strong><small>Follows the Windows light or dark theme.</small></span><span className="theme-pill">System <ChevronDown size={14} /></span></div></div><UpdateSettings /></section>;
 }
 
 export default App;

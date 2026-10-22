@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IpcMainInvokeEvent } from "electron";
 import { NotionService } from "./notion";
+import { UpdateController } from "./updates";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
 import type {
   AppState,
@@ -247,6 +248,23 @@ export class DesktopRuntime {
   private quitting = false;
   private readonly writeQueues = new Map<string, Promise<unknown>>();
   private readonly sourceWrites = new Map<string, number>();
+  private updateController: UpdateController | null = null;
+
+  private updates(): UpdateController {
+    if (!this.updateController) {
+      this.updateController = new UpdateController(app.getVersion(), app.isPackaged && process.platform === 'win32',
+        async () => {
+          const module = await import('electron-updater');
+          return (module.default ?? module).autoUpdater;
+        },
+        state => this.mainWindow?.webContents.send('desktop:update-state', state),
+        () => {
+          if (this.sourceWrites.size || this.writeQueues.size) throw new Error('Wait for your task changes to finish saving, then try again.');
+          this.quitting = true;
+        });
+    }
+    return this.updateController;
+  }
 
   private async withSourceWrite<T>(sourceId: string, action: () => Promise<T>): Promise<T> {
     this.sourceWrites.set(sourceId, (this.sourceWrites.get(sourceId) ?? 0) + 1);
@@ -309,6 +327,10 @@ export class DesktopRuntime {
       return handler(...args);
     };
     ipcMain.handle(CHANNELS.getState, guarded(() => this.snapshot()));
+    ipcMain.handle('desktop:get-update-state', guarded(() => this.updates().snapshot()));
+    ipcMain.handle('desktop:check-updates', guarded(() => this.updates().check()));
+    ipcMain.handle('desktop:download-update', guarded(() => this.updates().download()));
+    ipcMain.handle('desktop:install-update', guarded(() => this.updates().install()));
     ipcMain.handle(CHANNELS.connect, guarded((token) => this.connect(token)));
     ipcMain.handle(CHANNELS.disconnect, guarded(() => this.disconnect()));
     ipcMain.handle(CHANNELS.resolveSource, guarded((url) => this.resolveSource(url)));
@@ -810,6 +832,10 @@ export class DesktopRuntime {
       next.launchAtLogin = value.launchAtLogin;
     }
     if (value.selectedList !== undefined) next.selectedList = stringValue(value.selectedList, "selectedList");
+    if (value.showOverdue !== undefined) {
+      if (typeof value.showOverdue !== "boolean") throw new TypeError("showOverdue must be boolean");
+      next.showOverdue = value.showOverdue;
+    }
     if (value.lastSourceId !== undefined) next.lastSourceId = stringValue(value.lastSourceId, "lastSourceId");
     for (const key of ["bounds", "fullBounds", "compactBounds"] as const) {
       if (value[key] !== undefined) next[key] = this.validateBounds(value[key], key);

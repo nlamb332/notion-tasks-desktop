@@ -4,7 +4,7 @@ A personal Windows desktop task app with a full list view and compact floating w
 
 ## Install and connect
 
-1. Open [Releases](https://github.com/nlamb332/notion-tasks-desktop/releases) and download `Notion-Tasks-Setup-0.1.2.exe` from release `v0.1.2` (GitHub sign-in with repository access is required).
+1. Open [Releases](https://github.com/nlamb332/notion-tasks-desktop/releases/latest) and download the latest `Notion-Tasks-Setup-<version>.exe` installer.
 2. Run the Windows x64 installer and launch **Notion Tasks**. This personal build is unsigned, so Windows may display a publisher warning.
 3. Create a Notion internal integration at [Notion integrations](https://www.notion.so/profile/integrations), with permission to read, insert, and update content.
 4. Open each original task database's menu in Notion, select **Connections**, and add your integration. Grant access to each source you want to use.
@@ -23,7 +23,13 @@ If your database has multiple status-like properties, explicitly choose the inte
 
 ## Daily use
 
-Use Today, Upcoming, All Tasks, Important, Completed, or a source in the sidebar. Today uses your computer's local calendar date. Starred tasks are local to this installation. Select a task to edit it; click its completion control to complete or reopen it. Choose a source when adding a task. Open in Notion opens the original page.
+### App updates
+
+In **Settings → Preferences → App updates**, choose **Check for updates**, then **Download update**. Once the download completes, save any open draft and choose **Restart and install**. Updates come from this project's public GitHub releases; no GitHub token is required. Download progress and connection failures appear in the app. Closing to the tray or quitting does not install an update automatically. Installed Windows builds support updates; development builds show an explanation instead. Versions before 0.1.4 require one manual installer upgrade to get this feature.
+
+When publishing a new version, upload the generated installer, its `.exe.blockmap`, and `latest.yml` from `release/<version>/` to the same stable GitHub release. Publish the metadata with the matching installer; the updater verifies its SHA-512 checksum before offering installation. Do not include credentials in the build or update configuration. `npm run package` builds locally without publishing.
+
+Use Today, Upcoming, All Tasks, Important, Completed, or a source in the sidebar. Today uses your computer's local calendar date. Enable **Show overdue** in Today to also include unfinished tasks due before today. The toggle is available in full and compact modes, defaults off, and remembers your preference across restarts. Starred tasks are local to this installation. Select a task to edit it; click its completion control to complete or reopen it. Choose a source when adding a task. Open in Notion opens the original page.
 
 Date/time inputs use local time. Moving a due-date range moves its end by the same duration; use Notion to independently change a range's end. Unedited dates retain their original values and timezone metadata.
 

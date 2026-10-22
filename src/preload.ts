@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppState, DesktopAPI, SourceConfig, Task, TaskChanges, TaskDate, UpdateResult } from "./shared/types";
+import type { AppState, AppUpdateState, DesktopAPI, SourceConfig, Task, TaskChanges, TaskDate, UpdateResult } from "./shared/types";
 
 const channels = {
   getState: "desktop:get-state",
@@ -43,6 +43,16 @@ function ensureChanges(value: unknown): TaskChanges {
 }
 
 const desktop: DesktopAPI = {
+  getUpdateState: () => ipcRenderer.invoke('desktop:get-update-state'),
+  checkForUpdates: () => ipcRenderer.invoke('desktop:check-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('desktop:download-update'),
+  installUpdate: () => ipcRenderer.invoke('desktop:install-update'),
+  onUpdateState: callback => {
+    if (typeof callback !== 'function') throw new TypeError('callback must be a function');
+    const listener = (_event: Electron.IpcRendererEvent, state: AppUpdateState) => callback(state);
+    ipcRenderer.on('desktop:update-state', listener);
+    return () => ipcRenderer.removeListener('desktop:update-state', listener);
+  },
   getState: () => ipcRenderer.invoke(channels.getState),
   connect: (token) => ipcRenderer.invoke(channels.connect, ensureString(token, "token")),
   disconnect: () => ipcRenderer.invoke(channels.disconnect),

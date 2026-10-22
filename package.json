@@ -1,6 +1,6 @@
 {
   "name": "notion-tasks-desktop",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "private": true,
   "description": "A personal Windows task app and compact widget for Notion databases",
   "author": "Notion Tasks",
@@ -11,11 +11,12 @@
     "build": "tsc --noEmit && vite build && node scripts/build-electron.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "package": "npm run build && electron-builder --win nsis --x64",
+    "package": "npm run build && electron-builder --win nsis --x64 --publish never",
     "preview": "vite --host 127.0.0.1",
-    "test:desktop": "node scripts/smoke.mjs && node scripts/integration-smoke.mjs"
+    "test:desktop": "node scripts/smoke.mjs && node scripts/integration-smoke.mjs && node scripts/update-smoke.mjs"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.468.0",
     "luxon": "^3.7.2",
     "react": "^19.2.0",
@@ -39,6 +40,14 @@
     "global-agent": "^4.1.3"
   },
   "build": {
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "nlamb332",
+        "repo": "notion-tasks-desktop",
+        "releaseType": "release"
+      }
+    ],
     "appId": "com.notiontasks.desktop",
     "productName": "Notion Tasks",
     "directories": {

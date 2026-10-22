@@ -3,12 +3,24 @@ export interface Task { id: string; sourceId: string; name: string; url: string;
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
 export interface SourceCandidate { id: string; databaseId: string; name: string; properties: PropertyInfo[] }
 export interface SourceConfig extends SourceCandidate { mapping: { title: string; due: string | null; status: string; complete: string; reopen: string } }
-export interface DesktopSettings { compact: boolean; alwaysOnTop: boolean; launchAtLogin: boolean; selectedList: string; lastSourceId: string; bounds?: { x: number; y: number; width: number; height: number }; fullBounds?: { x: number; y: number; width: number; height: number }; compactBounds?: { x: number; y: number; width: number; height: number } }
+export interface DesktopSettings { compact: boolean; showOverdue?: boolean; alwaysOnTop: boolean; launchAtLogin: boolean; selectedList: string; lastSourceId: string; bounds?: { x: number; y: number; width: number; height: number }; fullBounds?: { x: number; y: number; width: number; height: number }; compactBounds?: { x: number; y: number; width: number; height: number } }
 export interface SyncState { syncing: boolean; lastSync: string | null; errors: Record<string, string>; onlineSources: string[] }
 export interface AppState { connected: boolean; sources: SourceConfig[]; tasks: Task[]; stars: string[]; settings: DesktopSettings; sync: SyncState }
 export interface TaskChanges { name?: string; due?: TaskDate; status?: string }
 export interface UpdateResult { task: Task; conflict?: boolean }
+export interface AppUpdateState {
+ currentVersion: string;
+ status: 'idle' | 'unsupported' | 'checking' | 'current' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error';
+ latestVersion?: string;
+ progress?: number;
+ message?: string;
+}
 export interface DesktopAPI {
+ getUpdateState(): Promise<AppUpdateState>;
+ checkForUpdates(): Promise<AppUpdateState>;
+ downloadUpdate(): Promise<AppUpdateState>;
+ installUpdate(): Promise<AppUpdateState>;
+ onUpdateState(callback: (state: AppUpdateState) => void): () => void;
  getState(): Promise<AppState>;
  connect(token: string): Promise<AppState>;
  disconnect(): Promise<AppState>;

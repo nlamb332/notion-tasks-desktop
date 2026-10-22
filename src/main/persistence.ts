@@ -13,6 +13,7 @@ export interface PersistedData {
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
   compact: false,
+  showOverdue: false,
   alwaysOnTop: false,
   launchAtLogin: false,
   selectedList: "today",
@@ -39,6 +40,7 @@ function cleanSettings(value: unknown): DesktopSettings {
   if (!isRecord(value)) return { ...DEFAULT_SETTINGS };
   const settings: DesktopSettings = {
     compact: typeof value.compact === "boolean" ? value.compact : DEFAULT_SETTINGS.compact,
+    showOverdue: typeof value.showOverdue === "boolean" ? value.showOverdue : false,
     alwaysOnTop: typeof value.alwaysOnTop === "boolean" ? value.alwaysOnTop : DEFAULT_SETTINGS.alwaysOnTop,
     launchAtLogin: typeof value.launchAtLogin === "boolean" ? value.launchAtLogin : DEFAULT_SETTINGS.launchAtLogin,
     selectedList: typeof value.selectedList === "string" ? value.selectedList : DEFAULT_SETTINGS.selectedList,
