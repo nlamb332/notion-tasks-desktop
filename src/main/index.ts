@@ -261,7 +261,8 @@ export class DesktopRuntime {
         () => {
           if (this.sourceWrites.size || this.writeQueues.size) throw new Error('Wait for your task changes to finish saving, then try again.');
           this.quitting = true;
-        });
+        },
+        () => { this.quitting = false; });
     }
     return this.updateController;
   }

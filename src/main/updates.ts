@@ -14,6 +14,7 @@ export class UpdateController {
     private readonly loadEngine: () => Promise<Engine>,
     private readonly notify: (state: AppUpdateState) => void,
     private readonly prepareInstall: () => void,
+    private readonly cancelInstall: () => void = () => {},
   ) {
     this.state = { currentVersion: version, status: supported ? 'idle' : 'unsupported' };
   }
@@ -26,6 +27,7 @@ export class UpdateController {
   }
 
   private failure() {
+    if (this.state.status === 'installing') this.cancelInstall();
     // Avoid exposing provider errors (which can contain URLs or environment details).
     this.set({ status: 'error', message: 'Could not update. Check your internet connection and try checking again.' });
   }
@@ -71,7 +73,10 @@ export class UpdateController {
     this.prepareInstall();
     this.set({ status: 'installing' });
     // Let the IPC response reach the renderer before the process exits.
-    setImmediate(() => engine.quitAndInstall(false, true));
+    setImmediate(() => {
+      try { engine.quitAndInstall(false, true); }
+      catch { this.failure(); }
+    });
     return this.snapshot();
   }
 }
