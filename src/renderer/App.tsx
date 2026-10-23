@@ -41,6 +41,7 @@ import {
   type ListId,
   sourceForTask,
   sourceStatusOptions,
+  taskStatusTone,
   taskDateFromInputs,
   timeInputValue,
 } from './utils';
@@ -376,9 +377,10 @@ function TaskRow({ state, task, selected, onSelect, onToggleStar, onToggleComple
   const due = formatTaskDue(task);
   const source = sourceForTask(task, state.sources);
   const editable = state.sync.onlineSources.includes(task.sourceId);
+  const statusLabel = task.status.trim() || (task.completed ? 'Completed' : 'No status');
   return <div className={`task-row ${selected ? 'selected' : ''} ${task.completed ? 'completed' : ''}`}>
     <button className={`check-button ${task.completed ? 'checked' : ''}`} aria-label={task.completed ? `Reopen ${task.name}` : `Complete ${task.name}`} disabled={!editable} onClick={() => onToggleComplete(task)}>{task.completed ? <Check size={14} strokeWidth={3} /> : null}</button>
-    <button className="task-main" onClick={() => onSelect(task)} aria-label={`Open ${task.name}`}><span className="task-name">{task.name || 'Untitled task'}</span><span className={`task-meta ${due.tone}`}><Clock3 size={13} />{due.label}<span className={`source-badge ${sourceColor(task.sourceId)}`}>{source?.name ?? 'Source unavailable'}</span></span></button>
+    <button className="task-main" onClick={() => onSelect(task)} aria-label={`Open ${task.name}`}><span className="task-name">{task.name || 'Untitled task'}</span><span className={`task-meta ${due.tone}`}><Clock3 size={13} />{due.label}<span className={`task-status ${taskStatusTone(task.status, task.completed)}`} title={`Status: ${statusLabel}`}><span className="task-status-dot" aria-hidden="true" />{statusLabel}</span><span className={`source-badge ${sourceColor(task.sourceId)}`}>{source?.name ?? 'Source unavailable'}</span></span></button>
     <button className={`star-button ${state.stars.includes(task.id) ? 'starred' : ''}`} aria-label={state.stars.includes(task.id) ? `Remove ${task.name} from important` : `Mark ${task.name} important`} onClick={() => onToggleStar(task)}>{state.stars.includes(task.id) ? <Star size={16} fill="currentColor" /> : <Star size={16} />}</button>
   </div>;
 }

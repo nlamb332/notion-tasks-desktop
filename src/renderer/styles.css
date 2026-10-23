@@ -135,6 +135,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .task-meta { min-width: 0; display: flex; align-items: center; gap: 6px; color: #91a0b2; font-size: 11px; }
 .task-meta.overdue { color: #c26d60; }
 .task-meta.today { color: #5b78b7; }
+.task-status { max-width: 150px; display: inline-flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 4px; padding: 2px 6px; border-radius: 999px; font-size: 10px; line-height: 1.2; font-weight: 600; }
+.task-status-dot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 5px; background: currentColor; }
+.task-status.complete { color: #277759; background: #e8f7ef; }
+.task-status.progress { color: #2d62c9; background: #e6efff; }
+.task-status.blocked { color: #b04c55; background: #ffebee; }
+.task-status.planned { color: #8a6b24; background: #fff6df; }
+.task-status.neutral { color: #687588; background: #f1f3f6; }
 .source-badge { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 4px; border-radius: 4px; padding: 2px 6px; font-size: 10px; }
 .star-button { border: 0; background: transparent; color: #a6b1bf; width: 27px; height: 27px; display: grid; place-items: center; border-radius: 6px; padding: 0; }
 .star-button:hover, .star-button.starred { color: #e1a231; background: #fff5e1; }
@@ -373,6 +380,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .source-badge.teal { color: #8ce3d3; background: #193e3c; }
   .source-badge.amber { color: #f0c982; background: #49391e; }
   .source-badge.rose { color: #f2a6af; background: #4c2930; }
+  .task-status.complete { color: #8ce3b8; background: #193e32; }
+  .task-status.progress { color: #a5c4ff; background: #20365f; }
+  .task-status.blocked { color: #f2a6af; background: #4c2930; }
+  .task-status.planned { color: #f0c982; background: #49391e; }
+  .task-status.neutral { color: #b3bfcd; background: #273140; }
   .candidate:hover { background: #1d2c42; }
   .mapping-preview { background: #141c27; }
   .toggle-row, .theme-row { background: #17202c; }
