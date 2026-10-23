@@ -8,6 +8,7 @@ import {
   listCounts,
   sortTasks,
   taskDateFromInputs,
+  taskStatusTone,
   taskStart,
   timeInputValue,
   toggleStatusForTask,
@@ -125,5 +126,14 @@ describe('renderer date and task helpers', () => {
     expect(toggleStatusForTask(task('open', '2026-10-21'), source())).toBe('Done');
     expect(toggleStatusForTask(task('done', '2026-10-21', true), source())).toBe('Not started');
     expect(toggleStatusForTask(task('open', null), source({ title: 'title', due: null, status: 'missing', complete: '', reopen: '' }))).toBe('true');
+  });
+
+  it('maps common and custom status labels to accessible visual tones', () => {
+    expect(taskStatusTone('Done')).toBe('complete');
+    expect(taskStatusTone('In progress')).toBe('progress');
+    expect(taskStatusTone('Waiting on review')).toBe('blocked');
+    expect(taskStatusTone('Not started')).toBe('planned');
+    expect(taskStatusTone('Needs QA')).toBe('neutral');
+    expect(taskStatusTone('Needs QA', true)).toBe('complete');
   });
 });

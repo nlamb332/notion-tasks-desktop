@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppState, AppUpdateState, DesktopAPI, SourceConfig, Task, TaskChanges, TaskDate, UpdateResult } from "./shared/types";
+import { SOURCE_COLORS, type AppState, type AppUpdateState, type DesktopAPI, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type UpdateResult } from "./shared/types";
 
 const channels = {
   getState: "desktop:get-state",
@@ -12,6 +12,7 @@ const channels = {
   createTask: "desktop:create-task",
   updateTask: "desktop:update-task",
   toggleStar: "desktop:toggle-star",
+  setSourceColor: "desktop:set-source-color",
   setSettings: "desktop:set-settings",
   openNotion: "desktop:open-notion",
   state: "desktop:state",
@@ -20,6 +21,11 @@ const channels = {
 function ensureString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
   return value;
+}
+
+function ensureSourceColor(value: unknown): SourceColor {
+  if (typeof value !== "string" || !SOURCE_COLORS.includes(value as SourceColor)) throw new TypeError("color must be a supported source color");
+  return value as SourceColor;
 }
 
 function ensureTaskDate(value: unknown): TaskDate | undefined {
@@ -66,6 +72,7 @@ const desktop: DesktopAPI = {
   },
   updateTask: (id, changes, expected: Task) => ipcRenderer.invoke(channels.updateTask, { id: ensureString(id, "id"), changes: ensureChanges(changes), expected }),
   toggleStar: (id) => ipcRenderer.invoke(channels.toggleStar, ensureString(id, "id")),
+  setSourceColor: (sourceId, color) => ipcRenderer.invoke(channels.setSourceColor, ensureString(sourceId, "sourceId"), ensureSourceColor(color)),
   setSettings: (settings) => ipcRenderer.invoke(channels.setSettings, settings),
   openNotion: (id) => ipcRenderer.invoke(channels.openNotion, ensureString(id, "id")),
   onState: (callback) => {

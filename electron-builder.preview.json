@@ -1,0 +1,37 @@
+{
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "nlamb332",
+      "repo": "notion-tasks-desktop",
+      "releaseType": "prerelease"
+    }
+  ],
+  "appId": "com.notiontasks.desktop.preview",
+  "productName": "Notion Tasks Preview",
+  "directories": {
+    "output": "release-preview/${version}"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*",
+    "assets/**/*",
+    "package.json"
+  ],
+  "asar": true,
+  "win": {
+    "target": "nsis",
+    "signAndEditExecutable": true,
+    "signExecutable": false,
+    "icon": "assets/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Notion Tasks Preview",
+    "artifactName": "Notion-Tasks-Preview-Setup-${version}.${ext}"
+  }
+}

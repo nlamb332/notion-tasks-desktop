@@ -176,6 +176,18 @@ export function sourceStatusOptions(source: SourceConfig | undefined) {
   return source.properties.find((property) => property.id === source.mapping.status)?.options ?? [];
 }
 
+export type TaskStatusTone = 'complete' | 'progress' | 'blocked' | 'planned' | 'neutral';
+
+/** Maps arbitrary Notion status labels to a small, consistent set of visual tones. */
+export function taskStatusTone(status: string, completed = false): TaskStatusTone {
+  const normalized = status.trim().toLowerCase();
+  if (completed || /\b(done|complete|completed|closed|resolved|finished|true)\b/.test(normalized)) return 'complete';
+  if (/\b(blocked|blocking|stuck|on hold|paused|waiting|at risk)\b/.test(normalized)) return 'blocked';
+  if (!normalized || /\b(not started|to do|todo|backlog|open|planned|queued|pending|false)\b/.test(normalized)) return 'planned';
+  if (/\b(in progress|progress|doing|active|started|working|review|reviewing)\b/.test(normalized)) return 'progress';
+  return 'neutral';
+}
+
 export function toggleStatusForTask(task: Task, source: SourceConfig | undefined): string | null {
   const options = sourceStatusOptions(source);
   const targetId = task.completed ? source?.mapping.reopen : source?.mapping.complete;

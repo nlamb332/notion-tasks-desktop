@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeStorage } from "electron";
-import type { AppState, DesktopSettings, SourceConfig, Task } from "../shared/types";
+import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type Task, type ThemePreference } from "../shared/types";
 
 export interface PersistedData {
   sources: SourceConfig[];
@@ -18,7 +18,16 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   launchAtLogin: false,
   selectedList: "today",
   lastSourceId: "",
+  theme: "system",
 };
+
+function isSourceColor(value: unknown): value is SourceColor {
+  return typeof value === "string" && SOURCE_COLORS.includes(value as SourceColor);
+}
+
+function isThemePreference(value: unknown): value is ThemePreference {
+  return value === "system" || value === "light" || value === "dark";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -45,6 +54,7 @@ function cleanSettings(value: unknown): DesktopSettings {
     launchAtLogin: typeof value.launchAtLogin === "boolean" ? value.launchAtLogin : DEFAULT_SETTINGS.launchAtLogin,
     selectedList: typeof value.selectedList === "string" ? value.selectedList : DEFAULT_SETTINGS.selectedList,
     lastSourceId: typeof value.lastSourceId === "string" ? value.lastSourceId : DEFAULT_SETTINGS.lastSourceId,
+    theme: isThemePreference(value.theme) ? value.theme : DEFAULT_SETTINGS.theme,
   };
   settings.bounds = cleanBounds(value.bounds);
   settings.fullBounds = cleanBounds(value.fullBounds);
@@ -71,6 +81,7 @@ function cleanSources(value: unknown): SourceConfig[] {
       databaseId: item.databaseId,
       name: item.name,
       properties,
+      ...(isSourceColor(item.color) ? { color: item.color } : {}),
       mapping: {
         title: mapping.title as string,
         due: typeof mapping.due === "string" ? mapping.due : null,
