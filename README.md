@@ -33,7 +33,7 @@ Use Today, Upcoming, All Tasks, Important, Completed, or a source in the sidebar
 
 Date/time inputs use local time. Moving a due-date range moves its end by the same duration; use Notion to independently change a range's end. Unedited dates retain their original values and timezone metadata.
 
-Click **Add a task** to open a draft in the details pane. Enter the name, due date/time, and destination source, then choose **Create task**. Drafts opened from Today default to the current local date; you can change or clear it before saving. Closing or cancelling the draft does not create a Notion page. Sync status appears beside the list heading.
+Click **Add a task** to open a draft in the details pane. Enter the name, due date/time, and destination source, optionally choose **Favorite**, then choose **Create task**. Favorite tasks appear in the Important list and are stored locally with the app's other preferences. Drafts opened from Today default to the current local date; you can change or clear it before saving. Closing or cancelling the draft does not create a Notion page. Sync status appears beside the list heading.
 
 Completing or reopening a task updates the list immediately while Notion saves in the background. **Undo** is available for eight seconds and restores the previous status, including In progress. A failed save removes the optimistic change and shows an error.
 

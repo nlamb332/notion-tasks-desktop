@@ -697,6 +697,8 @@ export class DesktopRuntime {
     const sourceId = stringValue(value.sourceId, "sourceId");
     const name = stringValue(value.name, "name");
     const due = taskDate(value.due);
+    if (value.favorite !== undefined && typeof value.favorite !== "boolean") throw new TypeError("favorite must be boolean");
+    const favorite = value.favorite === true;
     const source = this.state.sources.find((item) => item.id === sourceId);
     if (!source) throw new Error("Source not found");
     this.requireOnline(source);
@@ -711,6 +713,7 @@ export class DesktopRuntime {
     // The created page's ID is authoritative; task names are never identities.
     const task = cleanTask(created, sourceId);
     if (!this.state.tasks.some((item) => item.sourceId === sourceId && item.id === task.id)) this.state.tasks.push(task);
+    if (favorite && !this.state.stars.includes(task.id)) this.state.stars.push(task.id);
     this.state.sources = this.state.sources.map((item) => item.id === sourceId ? refreshed : item);
     this.persist();
     this.broadcast();

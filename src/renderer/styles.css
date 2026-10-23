@@ -156,6 +156,10 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .property-value { color: #4e6078; font-size: 12px; font-weight: 550; }
 .property-hint { color: #9aa6b4; font-size: 10px; line-height: 1.4; }
 .property-content select, .property-content input { width: 100%; min-width: 0; padding: 7px 8px; }
+.favorite-icon { color: #e1a231; }
+.favorite-option { cursor: pointer; }
+.favorite-option-main { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.favorite-option input { width: 17px; height: 17px; padding: 0; accent-color: #e1a231; }
 .date-edit-row { display: grid; grid-template-columns: minmax(0, 1fr) 92px auto; gap: 6px; align-items: center; }
 .date-edit-row input { padding: 7px 6px; }
 .clear-date { border: 0; background: transparent; color: var(--blue); padding: 5px 0; font-size: 11px; }

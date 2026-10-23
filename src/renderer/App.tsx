@@ -183,7 +183,7 @@ function App() {
     }
   }
 
-  async function createTask(sourceId: string, name: string, due?: TaskDate): Promise<Task | null> {
+  async function createTask(sourceId: string, name: string, due?: TaskDate, favorite = false): Promise<Task | null> {
     if (!apiAvailable() || !name.trim()) return null;
     if (state && !state.sync.onlineSources.includes(sourceId)) {
       setNotice('This source is offline. Reconnect it before adding tasks.');
@@ -191,7 +191,7 @@ function App() {
     }
     try {
       const beforeIds = new Set(state?.tasks.map((task) => task.id) ?? []);
-      const next = await window.desktop.createTask(sourceId, name.trim(), due);
+      const next = await window.desktop.createTask(sourceId, name.trim(), due, favorite);
       const created = next.tasks.find((task) => !beforeIds.has(task.id) && task.sourceId === sourceId) ?? null;
       try {
         setState(await window.desktop.setSettings({ lastSourceId: sourceId }));
@@ -415,11 +415,12 @@ function CompactView({ state, activeView, onView, sourceId, onSource, tasks, que
   </div>;
 }
 
-function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { state: AppState; draft: DraftTask; onCreate: (sourceId: string, name: string, due?: TaskDate) => Promise<Task | null>; onCreated: (task: Task) => void; onClose: () => void; onNotice: (message: string) => void }) {
+function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { state: AppState; draft: DraftTask; onCreate: (sourceId: string, name: string, due?: TaskDate, favorite?: boolean) => Promise<Task | null>; onCreated: (task: Task) => void; onClose: () => void; onNotice: (message: string) => void }) {
   const [title, setTitle] = useState(draft.name);
   const [sourceId, setSourceId] = useState(draft.sourceId || state.settings.lastSourceId || state.sources[0]?.id || '');
   const [date, setDate] = useState(draft.dueDate);
   const [time, setTime] = useState('');
+  const [favorite, setFavorite] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const online = Boolean(sourceId && state.sync.onlineSources.includes(sourceId));
@@ -429,6 +430,7 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
     setSourceId(draft.sourceId || state.settings.lastSourceId || state.sources[0]?.id || '');
     setDate(draft.dueDate);
     setTime('');
+    setFavorite(false);
     setError(null);
   }, [draft]);
 
@@ -449,7 +451,7 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
     setError(null);
     try {
       const due = date ? taskDateFromInputs(date, time, null) : undefined;
-      const created = await onCreate(sourceId, title, due);
+      const created = await onCreate(sourceId, title, due, favorite);
       if (created) onCreated(created);
       else setError('The task could not be created. Try again.');
     } catch (reason) {
@@ -463,6 +465,7 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
   return <aside className="detail-panel draft-panel"><div className="detail-header"><span>New task</span><button className="icon-button" aria-label="Close new task" onClick={onClose}><X size={17} /></button></div><div className="detail-scroll">
     <label className="detail-title"><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} aria-label="Task title" placeholder="Task name" /></label>
     <div className="detail-property"><div className="property-icon"><Calendar size={16} /></div><div className="property-content"><span className="property-label">Due date</span><div className="date-edit-row"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /><input type="time" value={time} disabled={!date} onChange={(event) => setTime(event.target.value)} /><button className="clear-date" disabled={!date} onClick={() => { setDate(''); setTime(''); }}>Clear</button></div><span className="property-hint">Optional · saved as your local time</span></div></div>
+    <div className="detail-property"><div className={`property-icon ${favorite ? 'favorite-icon' : ''}`}><Star size={16} fill={favorite ? 'currentColor' : 'none'} /></div><label className="property-content favorite-option"><span className="favorite-option-main"><span className="property-label">Favorite</span><input aria-label="Favorite this task" type="checkbox" checked={favorite} onChange={(event) => setFavorite(event.target.checked)} disabled={saving} /></span><span className="property-hint">Keep this task in your Important list.</span></label></div>
     <div className="detail-property"><div className="property-icon"><Database size={16} /></div><div className="property-content"><span className="property-label">Source</span><select aria-label="New task source" value={sourceId} onChange={(event) => setSourceId(event.target.value)} disabled={saving || !state.sources.length}>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select><span className="property-hint">{online ? 'Online · ready to save' : 'Offline · reconnect before saving'}</span></div></div>
     {error ? <p className="form-error" role="alert">{error}</p> : null}
     <div className="detail-footer"><button className="button button-secondary" onClick={onClose}>Cancel</button><button className="button button-primary" disabled={saving || !title.trim() || !online} onClick={() => void save()}>{saving ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}{saving ? 'Saving…' : 'Create task'}</button></div>

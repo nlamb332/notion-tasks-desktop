@@ -28,7 +28,7 @@ export interface DesktopAPI {
  saveSource(source: SourceConfig): Promise<AppState>;
  removeSource(id: string): Promise<AppState>;
  refresh(): Promise<AppState>;
- createTask(sourceId: string, name: string, due?: TaskDate): Promise<AppState>;
+ createTask(sourceId: string, name: string, due?: TaskDate, favorite?: boolean): Promise<AppState>;
  updateTask(id: string, changes: TaskChanges, expected: Task): Promise<UpdateResult>;
  toggleStar(id: string): Promise<AppState>;
  setSettings(settings: Partial<DesktopSettings>): Promise<AppState>;

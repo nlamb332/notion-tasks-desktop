@@ -78,7 +78,9 @@ try {
  await app.evaluate(()=>{globalThis.__fixture.pages['bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'].properties.title.title=[{plain_text:'Changed in Notion'}];});
  const conflict=await page.evaluate(t=>window.desktop.updateTask(t.id,{name:'Stale edit'},t),before);
  assert.equal(conflict.conflict,true);assert.equal(conflict.task.name,'Changed in Notion');
- await page.evaluate(s=>window.desktop.createTask(s.id,'Created through bridge'),sources[0]);
+ const bridgeCreated=await page.evaluate(s=>window.desktop.createTask(s.id,'Created through bridge',undefined,true),sources[0]);
+ const bridgeTask=bridgeCreated.tasks.find(t=>t.name==='Created through bridge');
+ assert.ok(bridgeTask);assert.ok(bridgeCreated.stars.includes(bridgeTask.id));
  await page.evaluate(()=>window.desktop.setSettings({selectedList:'all'}));
  await page.reload();await page.getByRole('button',{name:'Open Created through bridge',exact:true}).waitFor();
  assert.equal(await page.locator('.sync-banner').count(),0);
@@ -107,12 +109,15 @@ try {
  assert.equal(await page.locator('.draft-panel input[type="date"]').inputValue(),localToday);
  await page.getByRole('textbox',{name:'Task title',exact:true}).fill('Created through interface');
  await page.locator('.draft-panel input[type="date"]').fill('2026-10-22');
+ await page.getByRole('checkbox',{name:'Favorite this task',exact:true}).check();
  assert.equal((await page.evaluate(()=>window.desktop.getState())).tasks.length,3);
  await page.getByRole('button',{name:'Create task',exact:true}).click();
  await expect(page.locator('.draft-panel')).toHaveCount(0);
  await page.getByRole('button',{name:'All Tasks',exact:true}).click();
  await page.getByRole('button',{name:'Open Created through interface',exact:true}).waitFor();
- assert.equal((await page.evaluate(()=>window.desktop.getState())).tasks.find(t=>t.name==='Created through interface').due.start,'2026-10-22');
+ const interfaceState=await page.evaluate(()=>window.desktop.getState());
+ const interfaceTask=interfaceState.tasks.find(t=>t.name==='Created through interface');
+ assert.equal(interfaceTask.due.start,'2026-10-22');assert.ok(interfaceState.stars.includes(interfaceTask.id));
  await page.getByRole('button',{name:'Open Created through interface',exact:true}).click();
  await page.getByRole('button',{name:'Close task details',exact:true}).click();
  await page.screenshot({path:path.join(root,'.cache','tasks.png')});

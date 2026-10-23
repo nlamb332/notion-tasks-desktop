@@ -60,7 +60,10 @@ const desktop: DesktopAPI = {
   saveSource: (source: SourceConfig) => ipcRenderer.invoke(channels.saveSource, source),
   removeSource: (id) => ipcRenderer.invoke(channels.removeSource, ensureString(id, "id")),
   refresh: () => ipcRenderer.invoke(channels.refresh),
-  createTask: (sourceId, name, due) => ipcRenderer.invoke(channels.createTask, { sourceId: ensureString(sourceId, "sourceId"), name: ensureString(name, "name"), due: ensureTaskDate(due) }),
+  createTask: (sourceId, name, due, favorite) => {
+    if (favorite !== undefined && typeof favorite !== "boolean") throw new TypeError("favorite must be boolean");
+    return ipcRenderer.invoke(channels.createTask, { sourceId: ensureString(sourceId, "sourceId"), name: ensureString(name, "name"), due: ensureTaskDate(due), ...(favorite === undefined ? {} : { favorite }) });
+  },
   updateTask: (id, changes, expected: Task) => ipcRenderer.invoke(channels.updateTask, { id: ensureString(id, "id"), changes: ensureChanges(changes), expected }),
   toggleStar: (id) => ipcRenderer.invoke(channels.toggleStar, ensureString(id, "id")),
   setSettings: (settings) => ipcRenderer.invoke(channels.setSettings, settings),

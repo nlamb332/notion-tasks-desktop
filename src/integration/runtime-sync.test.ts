@@ -145,6 +145,26 @@ describe("DesktopRuntime sync boundary", () => {
     expect(runtime.service.listTasks).not.toHaveBeenCalled();
   });
 
+  it("persists a favorite when creating a task", async () => {
+    const first = source("source-a", "A");
+    const created = task("created", first.id, "Favorite task");
+    const runtime = new DesktopRuntime() as any;
+    const persisted = vi.fn();
+    runtime.state = appState([first], []);
+    runtime.service = {
+      inspectSource: vi.fn(async () => first),
+      createTask: vi.fn(async () => created),
+    };
+    runtime.persistence = { save: persisted };
+    runtime.mainWindow = null;
+
+    const next = await runtime.createTask({ sourceId: first.id, name: created.name, favorite: true });
+
+    expect(next.stars).toContain(created.id);
+    expect(runtime.state.stars).toContain(created.id);
+    expect(persisted).toHaveBeenCalledTimes(1);
+  });
+
   it("does not restore a removed source after a delayed create completes", async () => {
     const first = source("source-a", "A");
     let release!: () => void;
