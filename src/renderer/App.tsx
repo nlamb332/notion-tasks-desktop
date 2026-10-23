@@ -16,6 +16,8 @@ import {
   Inbox,
   ListTodo,
   LoaderCircle,
+  Monitor,
+  Moon,
   PanelLeft,
   Plus,
   RefreshCw,
@@ -30,7 +32,7 @@ import {
   X,
 } from 'lucide-react';
 import { UpdateSettings } from './UpdateSettings';
-import type { AppState, SourceCandidate, SourceConfig, Task, TaskChanges, TaskDate } from '../shared/types';
+import { SOURCE_COLORS, type AppState, type SourceCandidate, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type ThemePreference } from '../shared/types';
 import {
   autoMapping,
   dateInputValue,
@@ -74,11 +76,24 @@ function sourceName(sourceId: string, sources: SourceConfig[]): string {
   return sources.find((source) => source.id === sourceId)?.name ?? 'Unknown source';
 }
 
-function sourceColor(sourceId: string): string {
-  const palette = ['blue', 'violet', 'teal', 'amber', 'rose'];
+function sourceColor(sourceId: string, configured?: SourceColor): SourceColor {
+  if (configured) return configured;
   let hash = 0;
-  for (const character of sourceId) hash = (hash * 31 + character.charCodeAt(0)) % palette.length;
-  return palette[hash];
+  for (const character of sourceId) hash = (hash * 31 + character.charCodeAt(0)) % SOURCE_COLORS.length;
+  return SOURCE_COLORS[hash];
+}
+
+function applyTheme(preference: ThemePreference): () => void {
+  const media = window.matchMedia('(prefers-color-scheme: dark)');
+  const apply = () => {
+    const resolved = preference === 'system' ? (media.matches ? 'dark' : 'light') : preference;
+    document.documentElement.dataset.theme = resolved;
+    document.documentElement.style.colorScheme = resolved;
+  };
+  apply();
+  if (preference !== 'system') return () => undefined;
+  media.addEventListener('change', apply);
+  return () => media.removeEventListener('change', apply);
 }
 
 function taskVersionChanged(left: Task, right: Task): boolean {
@@ -133,6 +148,8 @@ function App() {
       }
     });
   }, [loadState]);
+
+  useEffect(() => applyTheme(state?.settings.theme ?? 'system'), [state?.settings.theme]);
 
   useEffect(() => {
     if (!notice) return undefined;
@@ -306,7 +323,7 @@ function Sidebar({ state, activeView, counts, onView, onSource, onSettings }: { 
       <div className="sidebar-divider" />
       <div className="source-heading"><p className="nav-label">Sources</p><button aria-label="Add source" title="Add source" onClick={() => onSettings('sources')}><Plus size={15} /></button></div>
       <div className="source-list">
-        {state.sources.map((source) => <button className="source-item" key={source.id} onClick={() => onSource(source.id)}><span className={`source-dot ${sourceColor(source.id)}`} /><span title={source.name}>{source.name}</span>{state.sync.errors[source.id] ? <span className="source-error-dot" title={state.sync.errors[source.id]} /> : null}</button>)}
+        {state.sources.map((source) => <button className="source-item" key={source.id} onClick={() => onSource(source.id)}><span className={`source-dot ${sourceColor(source.id, source.color)}`} /><span title={source.name}>{source.name}</span>{state.sync.errors[source.id] ? <span className="source-error-dot" title={state.sync.errors[source.id]} /> : null}</button>)}
         {!state.sources.length ? <p className="muted sidebar-empty">Connect a database in Settings.</p> : null}
       </div>
     </div>
@@ -380,7 +397,7 @@ function TaskRow({ state, task, selected, onSelect, onToggleStar, onToggleComple
   const statusLabel = task.status.trim() || (task.completed ? 'Completed' : 'No status');
   return <div className={`task-row ${selected ? 'selected' : ''} ${task.completed ? 'completed' : ''}`}>
     <button className={`check-button ${task.completed ? 'checked' : ''}`} aria-label={task.completed ? `Reopen ${task.name}` : `Complete ${task.name}`} disabled={!editable} onClick={() => onToggleComplete(task)}>{task.completed ? <Check size={14} strokeWidth={3} /> : null}</button>
-    <button className="task-main" onClick={() => onSelect(task)} aria-label={`Open ${task.name}`}><span className="task-name">{task.name || 'Untitled task'}</span><span className={`task-meta ${due.tone}`}><Clock3 size={13} />{due.label}<span className={`task-status ${taskStatusTone(task.status, task.completed)}`} title={`Status: ${statusLabel}`}><span className="task-status-dot" aria-hidden="true" />{statusLabel}</span><span className={`source-badge ${sourceColor(task.sourceId)}`}>{source?.name ?? 'Source unavailable'}</span></span></button>
+    <button className="task-main" onClick={() => onSelect(task)} aria-label={`Open ${task.name}`}><span className="task-name">{task.name || 'Untitled task'}</span><span className={`task-meta ${due.tone}`}><Clock3 size={13} />{due.label}<span className={`task-status ${taskStatusTone(task.status, task.completed)}`} title={`Status: ${statusLabel}`}><span className="task-status-dot" aria-hidden="true" />{statusLabel}</span><span className={`source-badge ${sourceColor(task.sourceId, source?.color)}`}>{source?.name ?? 'Source unavailable'}</span></span></button>
     <button className={`star-button ${state.stars.includes(task.id) ? 'starred' : ''}`} aria-label={state.stars.includes(task.id) ? `Remove ${task.name} from important` : `Mark ${task.name} important`} onClick={() => onToggleStar(task)}>{state.stars.includes(task.id) ? <Star size={16} fill="currentColor" /> : <Star size={16} />}</button>
   </div>;
 }
@@ -596,6 +613,7 @@ function SourcesSettings({ state, onState, onNotice }: { state: AppState; onStat
   const [mapping, setMapping] = useState<SourceConfig['mapping']>({ title: '', due: null, status: '', complete: '', reopen: '' });
   const [resolving, setResolving] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingColor, setSavingColor] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   async function resolve() {
@@ -608,14 +626,25 @@ function SourcesSettings({ state, onState, onNotice }: { state: AppState; onStat
   async function save() {
     if (!apiAvailable() || !candidate || !mapping.title || !mapping.status) { setError('Choose a title and status property before saving.'); return; }
     setSaving(true); setError(null);
-    try { const next = await window.desktop.saveSource({ ...candidate, mapping }); onState(next); setCandidate(null); setUrl(''); setEditingId(null); onNotice('Source saved.'); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save this source.'); } finally { setSaving(false); }
+    try {
+      const existing = state.sources.find((source) => source.id === candidate.id || source.databaseId === candidate.databaseId);
+      const next = await window.desktop.saveSource({ ...candidate, ...(existing?.color ? { color: existing.color } : {}), mapping });
+      onState(next); setCandidate(null); setUrl(''); setEditingId(null); onNotice('Source saved.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to save this source.'); } finally { setSaving(false); }
+  }
+  async function changeColor(source: SourceConfig, color: SourceColor) {
+    if (!apiAvailable() || sourceColor(source.id, source.color) === color) return;
+    setSavingColor(source.id);
+    try { onState(await window.desktop.setSourceColor(source.id, color)); onNotice(`${source.name} tag color updated.`); }
+    catch (reason) { onNotice(reason instanceof Error ? reason.message : 'Unable to update the tag color.'); }
+    finally { setSavingColor(null); }
   }
   async function remove(source: SourceConfig) {
     if (!apiAvailable() || !window.confirm(`Remove “${source.name}” from Notion Tasks?`)) return;
     try { onState(await window.desktop.removeSource(source.id)); onNotice('Source removed.'); } catch (reason) { onNotice(reason instanceof Error ? reason.message : 'Unable to remove this source.'); }
   }
   const statusProperty = candidate?.properties.find((property) => property.id === mapping.status);
-  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Sources</span><h2>Choose the databases you work from</h2><p>Paste a Notion database URL to discover available properties. Mapping uses property IDs so renamed columns stay connected.</p></div><div className="add-source-card"><div className="source-url-row"><div className="url-input"><FolderOpen size={16} /><input aria-label="Notion database URL" placeholder="https://www.notion.so/…" value={url} onChange={(event) => setUrl(event.target.value)} /><button className="button button-primary" disabled={resolving || !state.connected || !url.trim()} onClick={() => void resolve()}>{resolving ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}{resolving ? 'Resolving…' : 'Add source'}</button></div></div>{!state.connected ? <p className="muted form-note">Connect Notion before adding a database.</p> : null}{error ? <p className="form-error">{error}</p> : null}{candidates.length > 1 ? <div className="candidate-list"><strong>Choose a database</strong>{candidates.map((item) => <button key={item.id} className="candidate" onClick={() => choose(item)}><Database size={16} /><span><b>{item.name}</b><small>{item.properties.length} properties · {item.databaseId}</small></span><ChevronDown size={15} /></button>)}</div> : null}{candidate ? <MappingEditor candidate={candidate} mapping={mapping} setMapping={setMapping} statusProperty={statusProperty} editing={Boolean(editingId)} saving={saving} onSave={() => void save()} onCancel={() => { setCandidate(null); setEditingId(null); }} /> : null}</div><div className="source-cards">{state.sources.map((source) => <div className="source-card" key={source.id}><div className="source-card-main"><span className={`source-dot ${sourceColor(source.id)}`} /><div><strong>{source.name}</strong><span>{source.databaseId}</span>{state.sync.errors[source.id] ? <em>{state.sync.errors[source.id]}</em> : null}</div></div><div className="source-card-actions"><button className="button button-secondary" onClick={() => remap(source)}>Remap</button><button className="icon-button danger" aria-label={`Remove ${source.name}`} onClick={() => void remove(source)}><Trash2 size={16} /></button></div></div>)}{!state.sources.length ? <div className="empty-settings"><Database size={20} /><span>No sources yet. Add a shared Notion database above.</span></div> : null}</div></section>;
+  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Sources</span><h2>Choose the databases you work from</h2><p>Paste a Notion database URL to discover available properties. Mapping uses property IDs so renamed columns stay connected.</p></div><div className="add-source-card"><div className="source-url-row"><div className="url-input"><FolderOpen size={16} /><input aria-label="Notion database URL" placeholder="https://www.notion.so/…" value={url} onChange={(event) => setUrl(event.target.value)} /><button className="button button-primary" disabled={resolving || !state.connected || !url.trim()} onClick={() => void resolve()}>{resolving ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}{resolving ? 'Resolving…' : 'Add source'}</button></div></div>{!state.connected ? <p className="muted form-note">Connect Notion before adding a database.</p> : null}{error ? <p className="form-error">{error}</p> : null}{candidates.length > 1 ? <div className="candidate-list"><strong>Choose a database</strong>{candidates.map((item) => <button key={item.id} className="candidate" onClick={() => choose(item)}><Database size={16} /><span><b>{item.name}</b><small>{item.properties.length} properties · {item.databaseId}</small></span><ChevronDown size={15} /></button>)}</div> : null}{candidate ? <MappingEditor candidate={candidate} mapping={mapping} setMapping={setMapping} statusProperty={statusProperty} editing={Boolean(editingId)} saving={saving} onSave={() => void save()} onCancel={() => { setCandidate(null); setEditingId(null); }} /> : null}</div><div className="source-cards">{state.sources.map((source) => { const tagColor = sourceColor(source.id, source.color); return <div className="source-card" key={source.id}><div className="source-card-main"><span className={`source-dot ${tagColor}`} /><div><strong>{source.name}</strong><span>{source.databaseId}</span>{state.sync.errors[source.id] ? <em>{state.sync.errors[source.id]}</em> : null}</div></div><div className="source-card-actions"><div className="source-color-picker" role="group" aria-label={`Tag color for ${source.name}`}>{SOURCE_COLORS.map((color) => <button type="button" key={color} className={`source-color-option ${color} ${tagColor === color ? 'selected' : ''}`} aria-label={`Use ${color} tag color`} aria-pressed={tagColor === color} title={`${color[0].toUpperCase()}${color.slice(1)} tag`} disabled={savingColor === source.id} onClick={() => void changeColor(source, color)}><span className={`source-dot ${color}`} /></button>)}</div><button className="button button-secondary" onClick={() => remap(source)}>Remap</button><button className="icon-button danger" aria-label={`Remove ${source.name}`} onClick={() => void remove(source)}><Trash2 size={16} /></button></div></div>; })}{!state.sources.length ? <div className="empty-settings"><Database size={20} /><span>No sources yet. Add a shared Notion database above.</span></div> : null}</div></section>;
 }
 
 function MappingEditor({ candidate, mapping, setMapping, statusProperty, editing, saving, onSave, onCancel }: { candidate: SourceCandidate; mapping: SourceConfig['mapping']; setMapping: (mapping: SourceConfig['mapping']) => void; statusProperty?: SourceCandidate['properties'][number]; editing: boolean; saving: boolean; onSave: () => void; onCancel: () => void }) {
@@ -625,7 +654,13 @@ function MappingEditor({ candidate, mapping, setMapping, statusProperty, editing
 
 function PreferenceSettings({ state, onState, onNotice }: { state: AppState; onState: (state: AppState) => void; onNotice: (message: string) => void }) {
   async function update(patch: Partial<AppState['settings']>) { if (!apiAvailable()) return; try { onState(await window.desktop.setSettings(patch)); } catch (error) { onNotice(error instanceof Error ? error.message : 'Unable to save preferences.'); } }
-  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Preferences</span><h2>Shape your workspace</h2><p>These choices are stored by the desktop shell and apply to future launches.</p></div><div className="preference-list"><label className="toggle-row"><span><strong>Always on top</strong><small>Keep the task window above other apps.</small></span><input type="checkbox" checked={state.settings.alwaysOnTop} onChange={(event) => void update({ alwaysOnTop: event.target.checked })} /></label><label className="toggle-row"><span><strong>Launch at login</strong><small>Open Notion Tasks when Windows starts.</small></span><input type="checkbox" checked={state.settings.launchAtLogin} onChange={(event) => void update({ launchAtLogin: event.target.checked })} /></label><div className="theme-row"><span><strong>Appearance</strong><small>Follows the Windows light or dark theme.</small></span><span className="theme-pill">System <ChevronDown size={14} /></span></div></div><UpdateSettings /></section>;
+  const theme = state.settings.theme ?? 'system';
+  const themeOptions: { value: ThemePreference; label: string; icon: typeof Sun }[] = [
+    { value: 'system', label: 'System', icon: Monitor },
+    { value: 'light', label: 'Light', icon: Sun },
+    { value: 'dark', label: 'Dark', icon: Moon },
+  ];
+  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Preferences</span><h2>Shape your workspace</h2><p>These choices are stored by the desktop shell and apply to future launches.</p></div><div className="preference-list"><label className="toggle-row"><span><strong>Always on top</strong><small>Keep the task window above other apps.</small></span><input type="checkbox" checked={state.settings.alwaysOnTop} onChange={(event) => void update({ alwaysOnTop: event.target.checked })} /></label><label className="toggle-row"><span><strong>Launch at login</strong><small>Open Notion Tasks when Windows starts.</small></span><input type="checkbox" checked={state.settings.launchAtLogin} onChange={(event) => void update({ launchAtLogin: event.target.checked })} /></label><div className="theme-row"><span><strong>Appearance</strong><small>Choose light, dark, or follow Windows.</small></span><div className="theme-controls" role="group" aria-label="Appearance">{themeOptions.map(({ value, label, icon: Icon }) => <button type="button" key={value} className={`theme-choice ${theme === value ? 'selected' : ''}`} aria-label={`${label} appearance`} aria-pressed={theme === value} onClick={() => void update({ theme: value })}><Icon size={14} />{label}</button>)}</div></div></div><UpdateSettings /></section>;
 }
 
 export default App;

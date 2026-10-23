@@ -65,6 +65,11 @@ try {
  });
  let state=await page.evaluate(()=>window.desktop.getState());
  assert.equal(state.sources.length,2);assert.equal(state.tasks.length,2);
+ await page.evaluate(id=>window.desktop.setSourceColor(id,'rose'),sources[0].id);
+ state=await page.evaluate(()=>window.desktop.getState());
+ assert.equal(state.sources.find(source=>source.id===sources[0].id).color,'rose');
+ await page.evaluate(()=>window.desktop.setSettings({theme:'light'}));
+ await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');
  await page.evaluate(s=>window.desktop.saveSource(s),sources[0]);
  assert.equal((await page.evaluate(()=>window.desktop.getState())).sources.length,2);
  const school=state.tasks.find(t=>t.sourceId===sources[1].id);
@@ -82,7 +87,7 @@ try {
  const bridgeTask=bridgeCreated.tasks.find(t=>t.name==='Created through bridge');
  assert.ok(bridgeTask);assert.ok(bridgeCreated.stars.includes(bridgeTask.id));
  await page.evaluate(()=>window.desktop.setSettings({selectedList:'all'}));
- await page.reload();await page.getByRole('button',{name:'Open Created through bridge',exact:true}).waitFor();
+ await page.reload();await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');await page.getByRole('button',{name:'Open Created through bridge',exact:true}).waitFor();
  assert.equal(await page.locator('.sync-banner').count(),0);
  assert.ok(await page.locator('.topbar .sync-status').count());
  await page.getByLabel('Quick add task',{exact:true}).click();
@@ -162,5 +167,5 @@ try {
  await page.evaluate(()=>window.desktop.disconnect());
  await assert.rejects(readFile(path.join(data,'notion-token.enc')),/ENOENT/);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({result:'PASS',checks:['synthetic database URLs','two sources','duplicate source','edit correct source','complete and reopen','conflict','create','partial source failure retains tasks','offline writes blocked','offline local star','Status 1 untouched','renderer list and detail','encrypted credential storage','disconnect deletes credential','last successful sync persisted'],writes:fixture.writes.length,data,screenshots:['.cache/tasks.png','.cache/details.png','.cache/compact.png']},null,2));
+ console.log(JSON.stringify({result:'PASS',checks:['synthetic database URLs','two sources','duplicate source','persisted source tag color','explicit appearance preference','edit correct source','complete and reopen','conflict','create','partial source failure retains tasks','offline writes blocked','offline local star','Status 1 untouched','renderer list and detail','encrypted credential storage','disconnect deletes credential','last successful sync persisted'],writes:fixture.writes.length,data,screenshots:['.cache/tasks.png','.cache/details.png','.cache/compact.png']},null,2));
 }finally{await app.close();}

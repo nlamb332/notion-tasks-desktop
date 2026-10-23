@@ -8,23 +8,27 @@ import {
   Tray,
 } from "electron";
 import { ipcMain } from "electron";
+import { mkdirSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IpcMainInvokeEvent } from "electron";
 import { NotionService } from "./notion";
 import { UpdateController } from "./updates";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
-import type {
-  AppState,
-  DesktopSettings,
-  PropertyInfo,
-  SourceCandidate,
-  SourceConfig,
-  SyncState,
-  Task,
-  TaskChanges,
-  TaskDate,
-  UpdateResult,
+import {
+  SOURCE_COLORS,
+  type AppState,
+  type DesktopSettings,
+  type PropertyInfo,
+  type SourceCandidate,
+  type SourceConfig,
+  type SourceColor,
+  type SyncState,
+  type Task,
+  type TaskChanges,
+  type TaskDate,
+  type ThemePreference,
+  type UpdateResult,
 } from "../shared/types";
 
 type Service = {
@@ -49,6 +53,7 @@ const CHANNELS = {
   createTask: "desktop:create-task",
   updateTask: "desktop:update-task",
   toggleStar: "desktop:toggle-star",
+  setSourceColor: "desktop:set-source-color",
   setSettings: "desktop:set-settings",
   openNotion: "desktop:open-notion",
   state: "desktop:state",
@@ -70,8 +75,20 @@ function developmentUrl(): string | undefined {
   return undefined;
 }
 
+function isPrereleaseVersion(version: string): boolean {
+  return /-[0-9A-Za-z]/.test(version);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isSourceColor(value: unknown): value is SourceColor {
+  return typeof value === "string" && SOURCE_COLORS.includes(value as SourceColor);
+}
+
+function isThemePreference(value: unknown): value is ThemePreference {
+  return value === "system" || value === "light" || value === "dark";
 }
 
 function stringValue(value: unknown, name: string): string {
@@ -341,6 +358,7 @@ export class DesktopRuntime {
     ipcMain.handle(CHANNELS.createTask, guarded((input) => this.createTask(input)));
     ipcMain.handle(CHANNELS.updateTask, guarded((input) => this.updateTask(input)));
     ipcMain.handle(CHANNELS.toggleStar, guarded((id) => this.toggleStar(id)));
+    ipcMain.handle(CHANNELS.setSourceColor, guarded((id, color) => this.setSourceColor(id, color)));
     ipcMain.handle(CHANNELS.setSettings, guarded((settings) => this.setSettings(settings)));
     ipcMain.handle(CHANNELS.openNotion, guarded((id) => this.openNotion(id)));
   }
@@ -817,6 +835,17 @@ export class DesktopRuntime {
     return this.snapshot();
   }
 
+  private async setSourceColor(sourceValue: unknown, colorValue: unknown): Promise<AppState> {
+    const id = stringValue(sourceValue, "sourceId");
+    if (!isSourceColor(colorValue)) throw new TypeError("color must be a supported source color");
+    const source = this.state.sources.find((item) => item.id === id);
+    if (!source) throw new Error("Source not found");
+    source.color = colorValue;
+    this.persist();
+    this.broadcast();
+    return this.snapshot();
+  }
+
   private async setSettings(value: unknown): Promise<AppState> {
     if (!isRecord(value)) throw new TypeError("settings is invalid");
     const previousMode = this.state.settings.compact;
@@ -841,6 +870,10 @@ export class DesktopRuntime {
       next.showOverdue = value.showOverdue;
     }
     if (value.lastSourceId !== undefined) next.lastSourceId = stringValue(value.lastSourceId, "lastSourceId");
+    if (value.theme !== undefined) {
+      if (!isThemePreference(value.theme)) throw new TypeError("theme must be system, light, or dark");
+      next.theme = value.theme;
+    }
     for (const key of ["bounds", "fullBounds", "compactBounds"] as const) {
       if (value[key] !== undefined) next[key] = this.validateBounds(value[key], key);
     }
@@ -888,6 +921,15 @@ let runtime: DesktopRuntime | null = null;
 let singleInstance = false;
 
 function boot(): void {
+  const previewChannel = process.env.NOTION_TASKS_CHANNEL === "preview" || isPrereleaseVersion(app.getVersion());
+  if (previewChannel) {
+    // Preview builds must be installable and runnable beside the stable app.
+    app.setName("Notion Tasks Preview");
+    app.setAppUserModelId("com.notiontasks.desktop.preview");
+    const previewUserData = process.env.NOTION_TASKS_USER_DATA || path.join(app.getPath("appData"), "Notion Tasks Preview");
+    mkdirSync(previewUserData, { recursive: true });
+    app.setPath("userData", previewUserData);
+  }
   const fixtureUserData = process.env.NOTION_TASKS_USER_DATA;
   if (!app.isPackaged && fixtureUserData) app.setPath("userData", fixtureUserData);
   singleInstance = app.requestSingleInstanceLock();

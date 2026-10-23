@@ -3,6 +3,10 @@ import type { AppUpdateState } from '../shared/types';
 
 type Engine = Pick<AppUpdater, 'autoDownload' | 'autoInstallOnAppQuit' | 'allowPrerelease' | 'allowDowngrade' | 'on' | 'checkForUpdates' | 'downloadUpdate' | 'quitAndInstall'>;
 
+function isPrereleaseVersion(version: string): boolean {
+  return /-[0-9A-Za-z]/.test(version);
+}
+
 /** Only the main process selects the feed and starts executable downloads. */
 export class UpdateController {
   private state: AppUpdateState;
@@ -37,7 +41,9 @@ export class UpdateController {
       this.engine = this.loadEngine().then(engine => {
         engine.autoDownload = false;
         engine.autoInstallOnAppQuit = false;
-        engine.allowPrerelease = false;
+        // Stable installs must never drift onto preview releases. Preview builds
+        // are identified by their semver suffix (for example, 0.1.5-rc.1).
+        engine.allowPrerelease = isPrereleaseVersion(this.state.currentVersion);
         engine.allowDowngrade = false;
         engine.on('update-available', info => this.set({ status: 'available', latestVersion: info.version }));
         engine.on('update-not-available', () => this.set({ status: 'current' }));

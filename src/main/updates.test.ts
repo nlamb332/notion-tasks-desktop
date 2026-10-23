@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 import { UpdateController } from './updates';
 
-function setup(supported = true) {
+function setup(version = '0.1.4', supported = true) {
   const engine = Object.assign(new EventEmitter(), {
     autoDownload: true, autoInstallOnAppQuit: true, allowPrerelease: true, allowDowngrade: true,
     checkForUpdates: vi.fn(async () => { engine.emit('update-available', { version: '0.2.0' }); return null; }),
@@ -17,7 +17,7 @@ function setup(supported = true) {
   const prepare = vi.fn();
   const cancel = vi.fn();
   const loader = vi.fn(async () => engine as any);
-  return { engine, notify, prepare, cancel, loader, controller: new UpdateController('0.1.4', supported, loader, notify, prepare, cancel) };
+  return { engine, notify, prepare, cancel, loader, controller: new UpdateController(version, supported, loader, notify, prepare, cancel) };
 }
 
 describe('desktop updates', () => {
@@ -40,7 +40,7 @@ describe('desktop updates', () => {
   });
 
   it('does not access the feed in development mode', async () => {
-    const s = setup(false);
+    const s = setup('0.1.4', false);
     expect((await s.controller.check()).status).toBe('unsupported');
     expect((await s.controller.download()).status).toBe('unsupported');
     expect(s.loader).not.toHaveBeenCalled();
@@ -61,6 +61,16 @@ describe('desktop updates', () => {
     await new Promise(resolve => setImmediate(resolve));
     expect(s.prepare).toHaveBeenCalledTimes(1);
     expect(s.engine.quitAndInstall).toHaveBeenCalledExactlyOnceWith(false, true);
+  });
+
+  it('allows preview updates only for prerelease builds', async () => {
+    const stable = setup('0.1.5');
+    await stable.controller.check();
+    expect(stable.engine.allowPrerelease).toBe(false);
+
+    const preview = setup('0.1.5-rc.1');
+    await preview.controller.check();
+    expect(preview.engine.allowPrerelease).toBe(true);
   });
 
   it('retains a ready update when active task writes prevent restart', async () => {

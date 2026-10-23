@@ -203,6 +203,33 @@ describe("DesktopRuntime sync boundary", () => {
     expect(next.sync.onlineSources).toEqual([first.id]);
   });
 
+  it("persists a local source tag color without changing Notion", async () => {
+    const first = source("source-a", "A");
+    const persisted = vi.fn();
+    const runtime = new DesktopRuntime() as any;
+    runtime.state = appState([first], []);
+    runtime.persistence = { save: persisted };
+    runtime.mainWindow = null;
+
+    const next = await runtime.setSourceColor(first.id, "rose");
+
+    expect(next.sources[0].color).toBe("rose");
+    expect(persisted).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists an explicit appearance preference", async () => {
+    const runtime = new DesktopRuntime() as any;
+    const persisted = vi.fn();
+    runtime.state = appState([], []);
+    runtime.persistence = { save: persisted };
+    runtime.mainWindow = null;
+
+    const next = await runtime.setSettings({ theme: "light" });
+
+    expect(next.settings.theme).toBe("light");
+    expect(persisted).toHaveBeenCalledTimes(1);
+  });
+
   it("blocks same-source remapping for the entire lifetime of a task save", async () => {
     const first = source("source-a", "A");
     const existing = task("task-a", first.id, "Existing");
