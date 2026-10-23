@@ -1,9 +1,10 @@
 import { _electron as electron, expect } from '@playwright/test';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
 
 const root = process.cwd();
+const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 await mkdir(path.join(root, '.cache'), { recursive: true });
 const data = await mkdtemp(path.join(root, '.cache', 'updates-'));
 const app = await electron.launch({ args: ['.'], env: { ...process.env, NOTION_TASKS_USER_DATA: data }, timeout: 30000 });
@@ -13,7 +14,7 @@ try {
   page.on('pageerror', error => errors.push(error.message));
   await page.waitForFunction(() => !!window.desktop);
   await page.getByRole('button', { name: 'Preferences', exact: true }).click();
-  await expect(page.getByText('Installed version: 0.1.4')).toBeVisible();
+  await expect(page.getByText(`Installed version: ${version}`)).toBeVisible();
   await expect(page.getByRole('button', { name: 'Check for updates', exact: true })).toBeDisabled();
 
   // Simulate an installed build with a mock engine. Never download or run an installer.
