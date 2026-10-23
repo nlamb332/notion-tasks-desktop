@@ -107,6 +107,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 
 .list-heading { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; justify-content: space-between; padding: 28px 30px 16px; }
 .list-heading-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.list-add-task { min-height: 30px; padding: 0 10px; }
 .app-updates { margin-top: 26px; border-top: 1px solid var(--line); padding-top: 18px; }
 .app-updates h3 { margin: 0 0 10px; }
 .app-updates p { font-size: 13px; line-height: 1.5; }
@@ -278,15 +279,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .compact-toolbar > select + select { max-width: 135px; font-weight: 500; color: #8190a3; }
 .compact-search { height: 35px; margin: 9px 12px 0; display: flex; align-items: center; gap: 7px; padding: 0 9px; color: #97a4b5; border: 1px solid var(--line); border-radius: 7px; background: #fafbfd; }
 .compact-shell .sync-banner { margin: 8px 12px 0; }
-.quick-add { display: flex; align-items: center; gap: 8px; margin: 10px 12px 4px; border-bottom: 1px solid var(--line); padding: 0 0 10px; color: var(--blue); }
-.quick-add input { min-width: 0; flex: 1; border: 0; outline: 0; color: var(--text); }
-.quick-add input::placeholder { color: #111827; opacity: 1; }
-.quick-add select { max-width: 105px; border: 0; background: transparent; color: #8190a3; font-size: 10px; outline: 0; }
-.quick-add .button { min-height: 28px; padding: 0 9px; }
-.full-quick-add { margin: 0 30px 1px; padding: 7px 8px 7px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfe; }
-.full-quick-add:focus-within { border-color: #b8cbed; box-shadow: 0 0 0 3px rgba(47, 104, 216, .06); }
-.full-quick-add select { max-width: 150px; border: 0; background: transparent; color: #8190a3; font-size: 11px; outline: 0; }
-.full-quick-add input { background: transparent; }
+.compact-add-row { display: flex; justify-content: flex-end; padding: 10px 12px 4px; }
 .sync-banner.healthy { color: #587d6c; background: #f1faf5; border-color: #dceee3; }
 .sync-banner.healthy > svg { color: #43a276; }
 .sync-status { position: relative; display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 220px; color: #668096; font-size: 10px; white-space: nowrap; }
@@ -348,7 +341,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .compact-toolbar .icon-button { width: 27px; height: 27px; flex-basis: 27px; }
   .compact-search { margin-left: 8px; margin-right: 8px; }
   .compact-shell .sync-banner { margin-left: 8px; margin-right: 8px; }
-  .compact-shell .quick-add { margin-left: 8px; margin-right: 8px; }
+  .compact-add-row { padding-left: 8px; padding-right: 8px; }
 }
 
 @media (max-width: 600px) {
@@ -380,7 +373,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 [data-theme="dark"] .search-field, [data-theme="dark"] .compact-search, [data-theme="dark"] .token-input, [data-theme="dark"] .url-input { background: #141c27; }
 [data-theme="dark"] .nav-item:hover, [data-theme="dark"] .settings-nav button:hover, [data-theme="dark"] .task-row:hover, [data-theme="dark"] .task-row.selected { background: #202b3a; }
 [data-theme="dark"] .task-row { border-bottom-color: #273140; }
-[data-theme="dark"] .quick-add input, [data-theme="dark"] .quick-add input::placeholder { color: #e4eaf3; }
 [data-theme="dark"] .sync-status { color: #9ab0c8; }
 [data-theme="dark"] .sync-status.has-errors { color: #e8c47d; }
 [data-theme="dark"] .source-badge.blue { color: #a5c4ff; background: #20365f; }

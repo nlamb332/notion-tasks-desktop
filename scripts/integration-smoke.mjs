@@ -90,7 +90,7 @@ try {
  await page.reload();await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');await page.getByRole('button',{name:'Open Created through bridge',exact:true}).waitFor();
  assert.equal(await page.locator('.sync-banner').count(),0);
  assert.ok(await page.locator('.topbar .sync-status').count());
- await page.getByLabel('Quick add task',{exact:true}).click();
+ await page.getByRole('button',{name:'Add a task',exact:true}).click();
  assert.equal(await page.locator('.draft-panel input[type="date"]').inputValue(),'');
  await page.getByRole('button',{name:'Close new task',exact:true}).click();
  await page.getByRole('button',{name:'Today',exact:true}).click();
@@ -109,7 +109,7 @@ try {
  await expect(page.getByRole('button',{name:'Open Plan the week',exact:true})).toHaveCount(0);
  await page.evaluate(()=>window.desktop.setSettings({compact:false}));
  await expect(page.getByRole('switch',{name:'Show overdue',exact:true})).not.toBeChecked();
- await page.getByLabel('Quick add task',{exact:true}).click();
+ await page.getByRole('button',{name:'Add a task',exact:true}).click();
  const localToday=await page.evaluate(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;});
  assert.equal(await page.locator('.draft-panel input[type="date"]').inputValue(),localToday);
  await page.getByRole('textbox',{name:'Task title',exact:true}).fill('Created through interface');
@@ -145,7 +145,7 @@ try {
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.screenshot({path:path.join(root,'.cache','compact.png')});
  await page.getByRole('combobox',{name:'Current list',exact:true}).selectOption('today');
- await page.getByLabel('Quick add task',{exact:true}).click();
+ await page.getByRole('button',{name:'Add a task',exact:true}).click();
  await expect(page.locator('.draft-panel')).toBeVisible();
  assert.equal(await page.locator('.draft-panel input[type="date"]').inputValue(),localToday);
  await page.getByRole('button',{name:'Close new task',exact:true}).click();

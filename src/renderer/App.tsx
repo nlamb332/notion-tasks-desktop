@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type Dispatch, type FormEvent, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   Archive,
   ArrowDownToLine,
@@ -289,8 +289,7 @@ function App() {
             ) : (
               <>
                 {showFilters ? <FilterBar state={state} filters={filters} statusOptions={statusOptions} onFilters={setFilters} /> : null}
-                <QuickAdd state={state} initialSourceId={filters.sourceId || state.settings.lastSourceId || state.sources[0]?.id || ''} onDraft={openDraft} />
-                <TaskListHeader activeView={activeView} count={filteredTasks.length} showOverdue={Boolean(state.settings.showOverdue)} onShowOverdue={(showOverdue) => void setAppSettings({ showOverdue })} />
+                <TaskListHeader activeView={activeView} count={filteredTasks.length} showOverdue={Boolean(state.settings.showOverdue)} onShowOverdue={(showOverdue) => void setAppSettings({ showOverdue })} onAddTask={() => openDraft(filters.sourceId || state.settings.lastSourceId || state.sources[0]?.id || '')} canAddTask={state.sources.length > 0} />
                 <TaskList
                   state={state}
                   tasks={filteredTasks}
@@ -374,9 +373,9 @@ function OverdueToggle({ checked, onChange }: { checked: boolean; onChange: (che
   return <label className="overdue-toggle"><input type="checkbox" role="switch" checked={checked} onChange={(event) => onChange(event.target.checked)} /><span>Show overdue</span></label>;
 }
 
-function TaskListHeader({ activeView, count, showOverdue, onShowOverdue }: { activeView: ListId; count: number; showOverdue: boolean; onShowOverdue: (checked: boolean) => void }) {
+function TaskListHeader({ activeView, count, showOverdue, onShowOverdue, onAddTask, canAddTask }: { activeView: ListId; count: number; showOverdue: boolean; onShowOverdue: (checked: boolean) => void; onAddTask: () => void; canAddTask: boolean }) {
   const list = listDefinitions.find((item) => item.id === activeView);
-  return <div className="list-heading"><div><h2>{list?.label}</h2><span>{count} {count === 1 ? 'task' : 'tasks'}</span></div><div className="list-heading-controls">{activeView === 'today' ? <OverdueToggle checked={showOverdue} onChange={onShowOverdue} /> : null}<span className="sort-note"><ArrowDownToLine size={14} /> Due date</span></div></div>;
+  return <div className="list-heading"><div><h2>{list?.label}</h2><span>{count} {count === 1 ? 'task' : 'tasks'}</span></div><div className="list-heading-controls"><button className="button button-primary list-add-task" aria-label="Add a task" onClick={onAddTask} disabled={!canAddTask}><Plus size={14} />Add task</button>{activeView === 'today' ? <OverdueToggle checked={showOverdue} onChange={onShowOverdue} /> : null}<span className="sort-note"><ArrowDownToLine size={14} /> Due date</span></div></div>;
 }
 
 function TaskList({ state, tasks, activeView, selectedTaskId, onSelect, onToggleStar, onToggleComplete }: { state: AppState; tasks: Task[]; activeView: ListId; selectedTaskId: string | null; onSelect: (task: Task) => void; onToggleStar: (task: Task) => void; onToggleComplete: (task: Task) => void }) {
@@ -402,34 +401,12 @@ function TaskRow({ state, task, selected, onSelect, onToggleStar, onToggleComple
   </div>;
 }
 
-function QuickAdd({ state, initialSourceId, onDraft, compact = false }: { state: AppState; initialSourceId: string; onDraft: (sourceId: string, name: string) => void; compact?: boolean }) {
-  const [newTask, setNewTask] = useState('');
-  const [sourceId, setSourceId] = useState(initialSourceId);
-  useEffect(() => {
-    setSourceId(initialSourceId || state.sources[0]?.id || '');
-  }, [initialSourceId]);
-  useEffect(() => {
-    if (!sourceId || !state.sources.some((source) => source.id === sourceId)) setSourceId(initialSourceId || state.sources[0]?.id || '');
-  }, [initialSourceId, sourceId, state.sources]);
-  const online = Boolean(sourceId && state.sync.onlineSources.includes(sourceId));
-  function openDraft() {
-    if (!sourceId || !state.sources.length) return;
-    onDraft(sourceId, newTask);
-  }
-  function submit(event: FormEvent) {
-    event.preventDefault();
-    if (!sourceId) return;
-    openDraft();
-  }
-  return <form className={`quick-add ${compact ? 'compact-quick-add' : 'full-quick-add'}`} onSubmit={submit}><Plus size={16} /><input aria-label="Quick add task" placeholder={online ? 'Add a task' : state.sources.length ? 'Source offline' : 'Connect a source to add tasks'} value={newTask} onChange={(event) => { const value = event.target.value; setNewTask(value); if (sourceId) onDraft(sourceId, value); }} onFocus={openDraft} disabled={!state.sources.length} /><select aria-label="Task source" value={sourceId} onChange={(event) => { setSourceId(event.target.value); onDraft(event.target.value, newTask); }} disabled={!state.sources.length}>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select><button className="button button-primary" type="submit" disabled={!sourceId}>{<Plus size={14} />}Add</button></form>;
-}
-
 function CompactView({ state, activeView, onView, sourceId, onSource, tasks, query, onQuery, onToggleStar, onToggleComplete, onSelect, onDraft, onExpand, onRefresh, onShowOverdue }: { state: AppState; activeView: ListId; onView: (view: ListId) => void; sourceId: string; onSource: (sourceId: string) => void; tasks: Task[]; query: string; onQuery: (value: string) => void; onToggleStar: (task: Task) => void; onToggleComplete: (task: Task) => void; onSelect: (task: Task) => void; onDraft: (sourceId: string, name: string) => void; onExpand: () => void; onRefresh: () => void; onShowOverdue: (checked: boolean) => void }) {
   return <div className="compact-shell">
     <header className="compact-toolbar"><div className="brand compact-brand"><div className="brand-mark"><Check size={16} strokeWidth={3} /></div><strong>Notion Tasks</strong></div><SyncStatus state={state} onRefresh={onRefresh} /><select aria-label="Current list" value={activeView} onChange={(event) => onView(event.target.value as ListId)}>{listDefinitions.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><select aria-label="Current source" value={sourceId} onChange={(event) => onSource(event.target.value)}><option value="">All sources</option>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select><button className="icon-button" aria-label="Refresh" onClick={onRefresh}><RefreshCw size={15} /></button><button className="icon-button" aria-label="Expand Notion Tasks" onClick={onExpand}><PanelLeft size={15} /></button></header>
     <div className="compact-search"><Search size={15} /><input aria-label="Search compact tasks" placeholder="Search" value={query} onChange={(event) => onQuery(event.target.value)} /></div>
     {activeView === 'today' ? <div className="compact-list-options"><OverdueToggle checked={Boolean(state.settings.showOverdue)} onChange={onShowOverdue} /></div> : null}
-    <QuickAdd state={state} initialSourceId={sourceId || state.settings.lastSourceId || state.sources[0]?.id || ''} onDraft={onDraft} compact />
+    <div className="compact-add-row"><button className="button button-primary" aria-label="Add a task" onClick={() => onDraft(sourceId || state.settings.lastSourceId || state.sources[0]?.id || '', '')} disabled={!state.sources.length}><Plus size={14} />Add task</button></div>
     <div className="compact-list">{tasks.map((task) => <TaskRow key={task.id} state={state} task={task} selected={false} onSelect={onSelect} onToggleStar={onToggleStar} onToggleComplete={onToggleComplete} />)}{!tasks.length ? <EmptyTaskState activeView={activeView} hasSources={state.sources.length > 0} /> : null}</div>
   </div>;
 }
