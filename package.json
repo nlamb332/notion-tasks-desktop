@@ -1,6 +1,6 @@
 {
   "name": "notion-tasks-desktop",
-  "version": "0.1.6",
+  "version": "0.1.7-rc.1",
   "private": true,
   "description": "A personal Windows task app and compact widget for Notion databases",
   "author": "Notion Tasks",
@@ -12,11 +12,12 @@
     "build": "tsc --noEmit && vite build && node scripts/build-electron.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:plane": "node scripts/plane-api-smoke.mjs",
     "package": "npm run build && electron-builder --win nsis --x64 --publish never",
     "package:preview": "node scripts/validate-preview.mjs && npm run build && electron-builder --config electron-builder.preview.json --win nsis --x64 --publish never",
     "preview": "vite --host 127.0.0.1",
     "validate:release": "node scripts/validate-release.mjs",
-    "test:desktop": "node scripts/smoke.mjs && node scripts/integration-smoke.mjs && node scripts/update-smoke.mjs"
+    "test:desktop": "node scripts/smoke.mjs && node scripts/integration-smoke.mjs && node scripts/plane-smoke.mjs && node scripts/update-smoke.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9",

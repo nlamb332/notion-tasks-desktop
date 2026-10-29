@@ -12,6 +12,8 @@ release-preview/
 IMPLEMENTATION.md
 state.json
 notion-token.enc
+plane-token.enc
+plane-config.json
 user-data/
 userdata/
 *.pem

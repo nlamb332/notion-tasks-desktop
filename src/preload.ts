@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { SOURCE_COLORS, type AppState, type AppUpdateState, type DesktopAPI, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type UpdateResult } from "./shared/types";
+import { SOURCE_COLORS, type AppState, type AppUpdateState, type ConnectionConfig, type DesktopAPI, type PlaneConnectionInput, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type UpdateResult } from "./shared/types";
 
 const channels = {
   getState: "desktop:get-state",
   connect: "desktop:connect",
+  connectPlane: "desktop:connect-plane",
+  listPlaneProjects: "desktop:list-plane-projects",
   disconnect: "desktop:disconnect",
   resolveSource: "desktop:resolve-source",
   saveSource: "desktop:save-source",
@@ -21,6 +23,30 @@ const channels = {
 function ensureString(value: unknown, name: string): string {
   if (typeof value !== "string" || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
   return value;
+}
+
+function ensureConnection(value: unknown): string | ConnectionConfig {
+  if (typeof value === "string") return ensureString(value, "token");
+  if (typeof value !== "object" || value === null) throw new TypeError("connection is invalid");
+  const input = value as Record<string, unknown>;
+  const provider = input.provider;
+  if (provider !== "notion" && provider !== "plane") throw new TypeError("connection.provider is invalid");
+  const token = ensureString(input.token, "token");
+  const result: ConnectionConfig = { provider, token };
+  if (input.baseUrl !== undefined) result.baseUrl = ensureString(input.baseUrl, "baseUrl");
+  if (input.workspaceSlug !== undefined) result.workspaceSlug = ensureString(input.workspaceSlug, "workspaceSlug");
+  return result;
+}
+
+function ensurePlaneConnection(value: unknown): PlaneConnectionInput {
+  if (typeof value !== "object" || value === null) throw new TypeError("Plane connection is invalid");
+  const input = value as Record<string, unknown>;
+  const result: PlaneConnectionInput = {
+    apiKey: ensureString(input.apiKey, "apiKey"),
+    workspaceSlug: ensureString(input.workspaceSlug, "workspaceSlug"),
+  };
+  if (input.baseUrl !== undefined) result.baseUrl = ensureString(input.baseUrl, "baseUrl");
+  return result;
 }
 
 function ensureSourceColor(value: unknown): SourceColor {
@@ -60,8 +86,13 @@ const desktop: DesktopAPI = {
     return () => ipcRenderer.removeListener('desktop:update-state', listener);
   },
   getState: () => ipcRenderer.invoke(channels.getState),
-  connect: (token) => ipcRenderer.invoke(channels.connect, ensureString(token, "token")),
-  disconnect: () => ipcRenderer.invoke(channels.disconnect),
+  connect: (input) => ipcRenderer.invoke(channels.connect, ensureConnection(input)),
+  connectPlane: (input) => ipcRenderer.invoke(channels.connectPlane, ensurePlaneConnection(input)),
+  listPlaneProjects: (workspaceSlug, baseUrl) => ipcRenderer.invoke(channels.listPlaneProjects, {
+    ...(workspaceSlug === undefined ? {} : { workspaceSlug: ensureString(workspaceSlug, "workspaceSlug") }),
+    ...(baseUrl === undefined ? {} : { baseUrl: ensureString(baseUrl, "baseUrl") }),
+  }),
+  disconnect: (provider) => ipcRenderer.invoke(channels.disconnect, provider),
   resolveSource: (url) => ipcRenderer.invoke(channels.resolveSource, ensureString(url, "url")),
   saveSource: (source: SourceConfig) => ipcRenderer.invoke(channels.saveSource, source),
   removeSource: (id) => ipcRenderer.invoke(channels.removeSource, ensureString(id, "id")),

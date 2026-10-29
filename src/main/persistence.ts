@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeStorage } from "electron";
-import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type Task, type ThemePreference } from "../shared/types";
+import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type SourceProvider, type Task, type ThemePreference } from "../shared/types";
 
 export interface PersistedData {
   sources: SourceConfig[];
@@ -76,11 +76,18 @@ function cleanSources(value: unknown): SourceConfig[] {
       isRecord(property) && typeof property.id === "string" && typeof property.name === "string" && typeof property.type === "string",
     );
     seen.add(item.id);
+    const provider: SourceProvider = item.provider === "plane" ? "plane" : "notion";
     result.push({
       id: item.id,
       databaseId: item.databaseId,
       name: item.name,
       properties,
+      ...(provider === "plane" ? {
+        provider,
+        ...(typeof item.workspaceSlug === "string" ? { workspaceSlug: item.workspaceSlug } : {}),
+        ...(typeof item.projectId === "string" ? { projectId: item.projectId } : {}),
+        ...(typeof item.baseUrl === "string" ? { baseUrl: item.baseUrl } : {}),
+      } : {}),
       ...(isSourceColor(item.color) ? { color: item.color } : {}),
       mapping: {
         title: mapping.title as string,
@@ -127,10 +134,14 @@ export function defaultPersistedData(): PersistedData {
 export class AppPersistence {
   private readonly statePath: string;
   private readonly tokenPath: string;
+  private readonly planeTokenPath: string;
+  private readonly planeConfigPath: string;
 
   constructor(private readonly directory: string) {
     this.statePath = path.join(directory, "state.json");
     this.tokenPath = path.join(directory, "notion-token.enc");
+    this.planeTokenPath = path.join(directory, "plane-token.enc");
+    this.planeConfigPath = path.join(directory, "plane-config.json");
   }
 
   load(): PersistedData {
@@ -165,29 +176,58 @@ export class AppPersistence {
     fs.renameSync(temporaryPath, this.statePath);
   }
 
-  loadToken(): string | null {
+  loadToken(provider: SourceProvider = "notion"): string | null {
     try {
       if (!safeStorage.isEncryptionAvailable()) return null;
-      const encrypted = fs.readFileSync(this.tokenPath);
+      const encrypted = fs.readFileSync(provider === "plane" ? this.planeTokenPath : this.tokenPath);
       return safeStorage.decryptString(encrypted) || null;
     } catch {
       return null;
     }
   }
 
-  saveToken(token: string): boolean {
+  saveToken(token: string, provider: SourceProvider = "notion"): boolean {
     if (!safeStorage.isEncryptionAvailable()) return false;
     fs.mkdirSync(this.directory, { recursive: true });
     const encrypted = safeStorage.encryptString(token);
-    const temporaryPath = `${this.tokenPath}.${process.pid}.tmp`;
+    const targetPath = provider === "plane" ? this.planeTokenPath : this.tokenPath;
+    const temporaryPath = `${targetPath}.${process.pid}.tmp`;
     fs.writeFileSync(temporaryPath, encrypted, { mode: 0o600 });
-    fs.renameSync(temporaryPath, this.tokenPath);
+    fs.renameSync(temporaryPath, targetPath);
     return true;
   }
 
-  clearToken(): void {
+  clearToken(provider: SourceProvider = "notion"): void {
+    const targetPath = provider === "plane" ? this.planeTokenPath : this.tokenPath;
     try {
-      fs.unlinkSync(this.tokenPath);
+      fs.unlinkSync(targetPath);
+    } catch (error) {
+      const code = isRecord(error) ? error.code : undefined;
+      if (code !== "ENOENT") throw error;
+    }
+  }
+
+  loadPlaneConfig(): { baseUrl?: string; workspaceSlug?: string } | null {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.planeConfigPath, "utf8")) as Record<string, unknown>;
+      const baseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl : undefined;
+      const workspaceSlug = typeof raw.workspaceSlug === "string" ? raw.workspaceSlug : undefined;
+      return baseUrl || workspaceSlug ? { ...(baseUrl ? { baseUrl } : {}), ...(workspaceSlug ? { workspaceSlug } : {}) } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  savePlaneConfig(config: { baseUrl?: string; workspaceSlug?: string }): void {
+    fs.mkdirSync(this.directory, { recursive: true });
+    const temporaryPath = `${this.planeConfigPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryPath, JSON.stringify(config), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporaryPath, this.planeConfigPath);
+  }
+
+  clearPlaneConfig(): void {
+    try {
+      fs.unlinkSync(this.planeConfigPath);
     } catch (error) {
       const code = isRecord(error) ? error.code : undefined;
       if (code !== "ENOENT") throw error;

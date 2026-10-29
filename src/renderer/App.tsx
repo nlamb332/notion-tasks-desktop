@@ -13,6 +13,7 @@ import {
   Filter,
   Flag,
   FolderOpen,
+  Layers,
   Inbox,
   ListTodo,
   LoaderCircle,
@@ -32,7 +33,7 @@ import {
   X,
 } from 'lucide-react';
 import { UpdateSettings } from './UpdateSettings';
-import { SOURCE_COLORS, type AppState, type SourceCandidate, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type ThemePreference } from '../shared/types';
+import { SOURCE_COLORS, type AppState, type PlaneConnectionInput, type SourceCandidate, type SourceColor, type SourceConfig, type SourceProvider, type Task, type TaskChanges, type TaskDate, type ThemePreference } from '../shared/types';
 import {
   autoMapping,
   dateInputValue,
@@ -51,6 +52,46 @@ import { useTaskCompletion } from './completion';
 import './styles.css';
 
 type ViewId = ListId | 'settings';
+
+/** Provider metadata is shared by both integrations; legacy sources default to Notion. */
+type ProviderId = SourceProvider;
+type ProviderSource = SourceConfig & {
+  provider?: ProviderId;
+  projectId?: string;
+  workspaceId?: string;
+  workspaceSlug?: string;
+  baseUrl?: string;
+};
+type ProviderTask = Task & { provider?: ProviderId };
+
+function providerOf(source: Pick<SourceConfig, 'provider'> | undefined): ProviderId {
+  const value = (source as ProviderSource | undefined)?.provider;
+  return value === 'plane' ? 'plane' : 'notion';
+}
+
+function providerTaskOf(task: Task, source?: SourceConfig): ProviderId {
+  if (source) return providerOf(source);
+  const value = (task as ProviderTask).provider;
+  return value === 'plane' || task.sourceId.toLowerCase().startsWith('plane|') || task.sourceId.toLowerCase().startsWith('plane:') ? 'plane' : 'notion';
+}
+
+function providerLabel(provider: ProviderId): string {
+  return provider === 'plane' ? 'Plane' : 'Notion';
+}
+
+function providerSourceLabel(source: Pick<SourceConfig, 'provider'> | undefined): string {
+  return providerLabel(providerOf(source));
+}
+
+function explicitProviderConnection(state: AppState, provider: ProviderId): boolean | undefined {
+  const record = state as AppState & {
+    connectedProviders?: SourceProvider[];
+    connections?: Partial<Record<SourceProvider, { connected?: boolean }>>;
+  };
+  if (Array.isArray(record.connectedProviders)) return record.connectedProviders.includes(provider);
+  const connection = record.connections?.[provider];
+  return connection?.connected;
+}
 
 type DraftTask = {
   sourceId: string;
@@ -322,8 +363,8 @@ function Sidebar({ state, activeView, counts, onView, onSource, onSettings }: { 
       <div className="sidebar-divider" />
       <div className="source-heading"><p className="nav-label">Sources</p><button aria-label="Add source" title="Add source" onClick={() => onSettings('sources')}><Plus size={15} /></button></div>
       <div className="source-list">
-        {state.sources.map((source) => <button className="source-item" key={source.id} onClick={() => onSource(source.id)}><span className={`source-dot ${sourceColor(source.id, source.color)}`} /><span title={source.name}>{source.name}</span>{state.sync.errors[source.id] ? <span className="source-error-dot" title={state.sync.errors[source.id]} /> : null}</button>)}
-        {!state.sources.length ? <p className="muted sidebar-empty">Connect a database in Settings.</p> : null}
+        {state.sources.map((source) => <button className="source-item" key={source.id} onClick={() => onSource(source.id)}><span className={`source-dot ${sourceColor(source.id, source.color)}`} /><span title={source.name}>{source.name}</span><small className={`provider-mini ${providerOf(source)}`}>{providerSourceLabel(source)}</small>{state.sync.errors[source.id] ? <span className="source-error-dot" title={state.sync.errors[source.id]} /> : null}</button>)}
+        {!state.sources.length ? <p className="muted sidebar-empty">Connect Notion or Plane in Settings.</p> : null}
       </div>
     </div>
     <div className="sidebar-footer">
@@ -385,7 +426,7 @@ function TaskList({ state, tasks, activeView, selectedTaskId, onSelect, onToggle
 }
 
 function EmptyTaskState({ activeView, hasSources }: { activeView: ListId; hasSources: boolean }) {
-  const copy = activeView === 'today' ? 'Nothing due today.' : activeView === 'upcoming' ? 'Your upcoming tasks will appear here.' : activeView === 'completed' ? 'Completed tasks will collect here.' : activeView === 'important' ? 'Star a task to keep it close.' : hasSources ? 'No tasks match these filters.' : 'Connect a Notion database to bring in your tasks.';
+  const copy = activeView === 'today' ? 'Nothing due today.' : activeView === 'upcoming' ? 'Your upcoming tasks will appear here.' : activeView === 'completed' ? 'Completed tasks will collect here.' : activeView === 'important' ? 'Star a task to keep it close.' : hasSources ? 'No tasks match these filters.' : 'Connect Notion or Plane to bring in your tasks.';
   return <div className="empty-state"><div className="empty-icon"><ListTodo size={22} /></div><strong>{copy}</strong><span>{hasSources ? 'Try another list or clear your filters.' : 'Your data stays in Notion and is cached locally for offline reading.'}</span></div>;
 }
 
@@ -394,9 +435,10 @@ function TaskRow({ state, task, selected, onSelect, onToggleStar, onToggleComple
   const source = sourceForTask(task, state.sources);
   const editable = state.sync.onlineSources.includes(task.sourceId);
   const statusLabel = task.status.trim() || (task.completed ? 'Completed' : 'No status');
+  const provider = providerTaskOf(task, source);
   return <div className={`task-row ${selected ? 'selected' : ''} ${task.completed ? 'completed' : ''}`}>
     <button className={`check-button ${task.completed ? 'checked' : ''}`} aria-label={task.completed ? `Reopen ${task.name}` : `Complete ${task.name}`} disabled={!editable} onClick={() => onToggleComplete(task)}>{task.completed ? <Check size={14} strokeWidth={3} /> : null}</button>
-    <button className="task-main" onClick={() => onSelect(task)} aria-label={`Open ${task.name}`}><span className="task-name">{task.name || 'Untitled task'}</span><span className={`task-meta ${due.tone}`}><Clock3 size={13} />{due.label}<span className={`task-status ${taskStatusTone(task.status, task.completed)}`} title={`Status: ${statusLabel}`}><span className="task-status-dot" aria-hidden="true" />{statusLabel}</span><span className={`source-badge ${sourceColor(task.sourceId, source?.color)}`}>{source?.name ?? 'Source unavailable'}</span></span></button>
+    <button className="task-main" onClick={() => onSelect(task)} aria-label={`Open ${task.name}`}><span className="task-name">{task.name || 'Untitled task'}</span><span className={`task-meta ${due.tone}`}><Clock3 size={13} />{due.label}<span className={`task-status ${taskStatusTone(task.status, task.completed)}`} title={`Status: ${statusLabel}`}><span className="task-status-dot" aria-hidden="true" />{statusLabel}</span><span className={`source-badge ${sourceColor(task.sourceId, source?.color)}`}><span className="provider-badge-icon" aria-hidden="true">{provider === 'plane' ? <Layers size={10} /> : <Database size={10} />}</span>{source?.name ?? 'Source unavailable'}<small>{providerLabel(provider)}</small></span></span></button>
     <button className={`star-button ${state.stars.includes(task.id) ? 'starred' : ''}`} aria-label={state.stars.includes(task.id) ? `Remove ${task.name} from important` : `Mark ${task.name} important`} onClick={() => onToggleStar(task)}>{state.stars.includes(task.id) ? <Star size={16} fill="currentColor" /> : <Star size={16} />}</button>
   </div>;
 }
@@ -420,6 +462,8 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const online = Boolean(sourceId && state.sync.onlineSources.includes(sourceId));
+  const source = state.sources.find((item) => item.id === sourceId);
+  const dateOnly = providerOf(source) === 'plane';
 
   useEffect(() => {
     setTitle(draft.name);
@@ -460,7 +504,7 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
 
   return <aside className="detail-panel draft-panel"><div className="detail-header"><span>New task</span><button className="icon-button" aria-label="Close new task" onClick={onClose}><X size={17} /></button></div><div className="detail-scroll">
     <label className="detail-title"><input autoFocus value={title} onChange={(event) => setTitle(event.target.value)} aria-label="Task title" placeholder="Task name" /></label>
-    <div className="detail-property"><div className="property-icon"><Calendar size={16} /></div><div className="property-content"><span className="property-label">Due date</span><div className="date-edit-row"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /><input type="time" value={time} disabled={!date} onChange={(event) => setTime(event.target.value)} /><button className="clear-date" disabled={!date} onClick={() => { setDate(''); setTime(''); }}>Clear</button></div><span className="property-hint">Optional · saved as your local time</span></div></div>
+     <div className="detail-property"><div className="property-icon"><Calendar size={16} /></div><div className="property-content"><span className="property-label">Due date</span><div className="date-edit-row"><input type="date" value={date} onChange={(event) => setDate(event.target.value)} /><input type="time" value={time} disabled={!date || dateOnly} aria-label="Due time" onChange={(event) => setTime(event.target.value)} /><button className="clear-date" disabled={!date} onClick={() => { setDate(''); setTime(''); }}>Clear</button></div><span className="property-hint">{dateOnly ? 'Optional · Plane uses date-only due dates' : 'Optional · saved as your local time'}</span></div></div>
     <div className="detail-property"><div className={`property-icon ${favorite ? 'favorite-icon' : ''}`}><Star size={16} fill={favorite ? 'currentColor' : 'none'} /></div><label className="property-content favorite-option"><span className="favorite-option-main"><span className="property-label">Favorite</span><input aria-label="Favorite this task" type="checkbox" checked={favorite} onChange={(event) => setFavorite(event.target.checked)} disabled={saving} /></span><span className="property-hint">Keep this task in your Important list.</span></label></div>
     <div className="detail-property"><div className="property-icon"><Database size={16} /></div><div className="property-content"><span className="property-label">Source</span><select aria-label="New task source" value={sourceId} onChange={(event) => setSourceId(event.target.value)} disabled={saving || !state.sources.length}>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select><span className="property-hint">{online ? 'Online · ready to save' : 'Offline · reconnect before saving'}</span></div></div>
     {error ? <p className="form-error" role="alert">{error}</p> : null}
@@ -470,6 +514,8 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
 
 function DetailPanel({ state, task, onState, onClose, onNotice }: { state: AppState; task: Task; onState: Dispatch<SetStateAction<AppState | null>>; onClose: () => void; onNotice: (message: string) => void }) {
   const source = sourceForTask(task, state.sources);
+  const provider = providerTaskOf(task, source);
+  const dateOnly = provider === 'plane';
   const [baseline, setBaseline] = useState<Task>(task);
   const [title, setTitle] = useState(task.name);
   const [date, setDate] = useState(dateInputValue(task.due));
@@ -514,7 +560,7 @@ function DetailPanel({ state, task, onState, onClose, onNotice }: { state: AppSt
     setTime(timeInputValue(conflict.due));
     setStatus(conflict.status);
     setConflict(null);
-    onNotice('Current Notion values loaded.');
+    onNotice(`Current ${providerLabel(provider)} values loaded.`);
   }
 
   function reviewAndKeepDraft() {
@@ -555,12 +601,12 @@ function DetailPanel({ state, task, onState, onClose, onNotice }: { state: AppSt
   }
 
   return <aside className="detail-panel"><div className="detail-header"><span>Task details</span><button className="icon-button" aria-label="Close task details" onClick={onClose}><X size={17} /></button></div><div className="detail-scroll">
-    {conflict ? <div className="conflict-card"><div><strong>Changed in Notion</strong><span>Current: “{conflict.name}” · {conflict.status || 'No status'}</span></div><div className="conflict-actions"><button className="button button-secondary" onClick={reloadCurrent}>Reload current</button><button className="button button-secondary" onClick={reviewAndKeepDraft}>Keep my draft</button></div><span className="muted">Save is paused until you review the current values.</span></div> : null}
+    {conflict ? <div className="conflict-card"><div><strong>Changed in {providerLabel(provider)}</strong><span>Current: “{conflict.name}” · {conflict.status || 'No status'}</span></div><div className="conflict-actions"><button className="button button-secondary" onClick={reloadCurrent}>Reload current</button><button className="button button-secondary" onClick={reviewAndKeepDraft}>Keep my draft</button></div><span className="muted">Save is paused until you review the current values.</span></div> : null}
     <label className="detail-title"><input value={title} onChange={(event) => setTitle(event.target.value)} disabled={!editable} aria-label="Task title" /></label>
-    <div className="detail-property"><div className="property-icon"><Calendar size={16} /></div><div className="property-content"><span className="property-label">Due date</span><div className="date-edit-row"><input type="date" value={date} disabled={!editable} onChange={(event) => setDate(event.target.value)} /><input type="time" value={time} disabled={!editable || !date} onChange={(event) => setTime(event.target.value)} /><button className="clear-date" disabled={!editable || !date} onClick={() => { setDate(''); setTime(''); }}>Clear</button></div><span className="property-hint">{baseline.due?.end ? `Range ends ${displayDateTime({ start: baseline.due.end, end: null })}` : baseline.due?.time_zone ? `Timezone: ${baseline.due.time_zone}` : 'Local time'}</span></div></div>
+     <div className="detail-property"><div className="property-icon"><Calendar size={16} /></div><div className="property-content"><span className="property-label">Due date</span><div className="date-edit-row"><input type="date" value={date} disabled={!editable} onChange={(event) => setDate(event.target.value)} /><input type="time" value={time} disabled={!editable || !date || dateOnly} aria-label="Due time" onChange={(event) => setTime(event.target.value)} /><button className="clear-date" disabled={!editable || !date} onClick={() => { setDate(''); setTime(''); }}>Clear</button></div><span className="property-hint">{dateOnly ? 'Plane date-only due date' : baseline.due?.end ? `Range ends ${displayDateTime({ start: baseline.due.end, end: null })}` : baseline.due?.time_zone ? `Timezone: ${baseline.due.time_zone}` : 'Local time'}</span></div></div>
     <div className="detail-property"><div className="property-icon"><Flag size={16} /></div><div className="property-content"><span className="property-label">Status</span>{options.length ? <select value={status} disabled={!editable} onChange={(event) => setStatus(event.target.value)}>{!options.some((option) => option.name === status) ? <option value={status}>{status || 'Current status'}</option> : null}{options.map((option) => <option key={option.id} value={option.name}>{option.name}</option>)}</select> : <input value={status} disabled={!editable} onChange={(event) => setStatus(event.target.value)} placeholder="No status" />}</div></div>
-    <div className="detail-property"><div className="property-icon"><Database size={16} /></div><div className="property-content"><span className="property-label">Source</span><span className="property-value">{source?.name ?? 'Source unavailable'}</span><span className="property-hint">{editable ? 'Online · changes sync to Notion' : 'Offline · read-only until the source reconnects'}</span></div></div>
-    <div className="detail-footer"><button className="button button-secondary open-notion" onClick={() => apiAvailable() && void window.desktop.openNotion(task.id)}><ExternalLink size={15} /> Open in Notion</button>{editable ? <button className="button button-primary" disabled={!dirty || saving || Boolean(conflict)} onClick={() => void save()}>{saving ? <LoaderCircle size={15} className="spin" /> : null}{saving ? 'Saving…' : 'Save changes'}</button> : <span className="offline-note"><CloudOff size={14} /> Reconnect to edit</span>}</div>
+    <div className="detail-property"><div className="property-icon">{provider === 'plane' ? <Layers size={16} /> : <Database size={16} />}</div><div className="property-content"><span className="property-label">Source</span><span className="property-value">{source?.name ?? 'Source unavailable'}</span><span className="property-hint">{editable ? `Online · changes sync to ${providerLabel(provider)}` : 'Offline · read-only until the source reconnects'}</span></div></div>
+    <div className="detail-footer"><button className="button button-secondary open-notion" onClick={() => apiAvailable() && void window.desktop.openNotion(task.id)}><ExternalLink size={15} /> Open in {providerLabel(provider)}</button>{editable ? <button className="button button-primary" disabled={!dirty || saving || Boolean(conflict)} onClick={() => void save()}>{saving ? <LoaderCircle size={15} className="spin" /> : null}{saving ? 'Saving…' : 'Save changes'}</button> : <span className="offline-note"><CloudOff size={14} /> Reconnect to edit</span>}</div>
   </div></aside>;
 }
 
@@ -569,23 +615,66 @@ function SettingsView({ state, section, onSection, onState, onNotice }: { state:
 }
 
 function ConnectionSettings({ state, onState, onNotice }: { state: AppState; onState: (state: AppState) => void; onNotice: (message: string) => void }) {
-  const [token, setToken] = useState('');
-  const [connecting, setConnecting] = useState(false);
-  async function connect() {
-    if (!apiAvailable() || !token.trim()) return;
-    setConnecting(true);
-    try { onState(await window.desktop.connect(token.trim())); setToken(''); onNotice('Connected to Notion.'); } catch (error) { onNotice(error instanceof Error ? error.message : 'Unable to connect to Notion.'); } finally { setConnecting(false); }
+  const [notionToken, setNotionToken] = useState('');
+  const [planeToken, setPlaneToken] = useState('');
+  const [planeBaseUrl, setPlaneBaseUrl] = useState('https://api.plane.so');
+  const [planeWorkspace, setPlaneWorkspace] = useState('');
+  const [connecting, setConnecting] = useState<ProviderId | null>(null);
+  const explicitNotion = explicitProviderConnection(state, 'notion');
+  const explicitPlane = explicitProviderConnection(state, 'plane');
+  const [notionConnected, setNotionConnected] = useState(explicitNotion ?? (state.connected && state.sources.some((source) => providerOf(source) === 'notion')));
+  const [planeConnected, setPlaneConnected] = useState(explicitPlane ?? false);
+
+  useEffect(() => {
+    if (explicitNotion !== undefined) setNotionConnected(explicitNotion);
+    if (explicitPlane !== undefined) setPlaneConnected(explicitPlane);
+  }, [explicitNotion, explicitPlane]);
+
+  async function connectNotion() {
+    if (!apiAvailable() || !notionToken.trim()) return;
+    setConnecting('notion');
+    try { onState(await window.desktop.connect(notionToken.trim())); setNotionConnected(true); setNotionToken(''); onNotice('Connected to Notion.'); }
+    catch (error) { onNotice(error instanceof Error ? error.message : 'Unable to connect to Notion.'); }
+    finally { setConnecting(null); }
   }
-  async function disconnect() {
+
+  async function connectPlane() {
+    if (!apiAvailable() || !planeToken.trim() || !planeWorkspace.trim()) return;
+    setConnecting('plane');
+    const input: PlaneConnectionInput = { apiKey: planeToken.trim(), baseUrl: planeBaseUrl.trim() || undefined, workspaceSlug: planeWorkspace.trim() };
+    try { onState(await window.desktop.connectPlane(input)); setPlaneConnected(true); setPlaneToken(''); onNotice('Connected to Plane. Add a project below in Sources.'); }
+    catch (error) { onNotice(error instanceof Error ? error.message : 'Unable to connect to Plane.'); }
+    finally { setConnecting(null); }
+  }
+
+  async function disconnect(provider: ProviderId) {
     if (!apiAvailable()) return;
-    try { onState(await window.desktop.disconnect()); onNotice('Notion disconnected.'); } catch (error) { onNotice(error instanceof Error ? error.message : 'Unable to disconnect.'); }
+    setConnecting(provider);
+    try { onState(await window.desktop.disconnect(provider)); if (provider === 'plane') setPlaneConnected(false); else setNotionConnected(false); onNotice(`${providerLabel(provider)} disconnected.`); }
+    catch (error) { onNotice(error instanceof Error ? error.message : `Unable to disconnect from ${providerLabel(provider)}.`); }
+    finally { setConnecting(null); }
   }
-  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Connection</span><h2>{state.connected ? 'Your Notion workspace is connected' : 'Connect Notion to get started'}</h2><p>Notion Tasks reads the databases you explicitly share with your internal integration. Tokens are held by the desktop connection and are never persisted in the renderer.</p></div>{state.connected ? <div className="connected-card"><div className="connected-icon"><CheckCircle2 size={21} /></div><div><strong>Connected</strong><span>{state.sources.length} shared database{state.sources.length === 1 ? '' : 's'} available</span></div><button className="button button-secondary" onClick={() => void disconnect()}><Unplug size={15} /> Disconnect</button></div> : <div className="connect-card"><div className="step"><span>1</span><div><strong>Create an internal integration</strong><p>In Notion, open Settings → Connections → Develop or manage integrations, then create an internal integration.</p></div></div><div className="step"><span>2</span><div><strong>Copy the integration token</strong><p>Paste it here. Notion Tasks keeps it in the desktop connection and clears the form after connecting.</p><div className="token-input"><ShieldCheck size={16} /><input aria-label="Notion integration token" type="password" autoComplete="off" placeholder="secret_…" value={token} onChange={(event) => setToken(event.target.value)} /><button className="button button-primary" disabled={connecting || !token.trim()} onClick={() => void connect()}>{connecting ? 'Connecting…' : 'Connect'}</button></div></div></div><div className="step"><span>3</span><div><strong>Share each database with the integration</strong><p>Open the database menu in Notion, choose Connections, connect your integration, then add the database link as a source.</p></div></div></div>}</section>;
+
+  const notionCount = state.sources.filter((source) => providerOf(source) === 'notion').length;
+  const planeCount = state.sources.filter((source) => providerOf(source) === 'plane').length;
+  return <section className="settings-section">
+    <div className="settings-intro"><span className="eyebrow">Connections</span><h2>Connect your task providers</h2><p>Notion and Plane can stay connected at the same time. Tasks from both providers share the same lists, compact widget, status controls, and due-date editing.</p></div>
+    <div className="provider-connection-grid">
+      <div className="provider-connection-card"><div className="provider-card-heading"><span className="provider-card-icon notion"><Database size={18} /></span><div><strong>Notion</strong><span>{notionConnected ? `${notionCount} database${notionCount === 1 ? '' : 's'} connected` : 'Not connected'}</span></div></div>
+        {notionConnected ? <div className="connected-card provider-connected"><div className="connected-icon"><CheckCircle2 size={21} /></div><div><strong>Connected</strong><span>Shared databases are available in Sources.</span></div><button className="button button-secondary" disabled={connecting !== null} onClick={() => void disconnect('notion')}><Unplug size={15} /> Disconnect</button></div> : <div className="provider-form"><p>Create an internal integration in Notion, then paste its token here.</p><div className="token-input"><ShieldCheck size={16} /><input aria-label="Notion integration token" type="password" autoComplete="off" placeholder="secret_…" value={notionToken} onChange={(event) => setNotionToken(event.target.value)} /><button className="button button-primary" disabled={connecting !== null || !notionToken.trim()} onClick={() => void connectNotion()}>{connecting === 'notion' ? 'Connecting…' : 'Connect'}</button></div><small>Share each database with the integration before adding it as a source.</small></div>}
+      </div>
+      <div className="provider-connection-card"><div className="provider-card-heading"><span className="provider-card-icon plane"><Layers size={18} /></span><div><strong>Plane</strong><span>{planeConnected ? `${planeCount} project${planeCount === 1 ? '' : 's'} connected` : 'Not connected'}</span></div></div>
+        {planeConnected ? <div className="connected-card provider-connected"><div className="connected-icon"><CheckCircle2 size={21} /></div><div><strong>Connected</strong><span>Choose a Plane project from Sources.</span></div><button className="button button-secondary" disabled={connecting !== null} onClick={() => void disconnect('plane')}><Unplug size={15} /> Disconnect</button></div> : <div className="provider-form"><p>Use a Plane API key. The key is sent to the desktop shell and never stored in the renderer.</p><div className="provider-input-row"><label><span>API key</span><input aria-label="Plane API key" type="password" autoComplete="off" placeholder="plane_…" value={planeToken} onChange={(event) => setPlaneToken(event.target.value)} /></label><label><span>Workspace slug</span><input aria-label="Plane workspace slug" placeholder="my-workspace" value={planeWorkspace} onChange={(event) => setPlaneWorkspace(event.target.value)} /></label></div><label className="provider-wide-input"><span>Plane API base URL</span><input aria-label="Plane API base URL" value={planeBaseUrl} onChange={(event) => setPlaneBaseUrl(event.target.value)} /></label><button className="button button-primary" disabled={connecting !== null || !planeToken.trim() || !planeWorkspace.trim()} onClick={() => void connectPlane()}>{connecting === 'plane' ? 'Connecting…' : 'Connect Plane'}</button><small>After connecting, paste a project URL in Sources to select the project and map its status fields.</small></div>}
+      </div>
+    </div>
+  </section>;
 }
 
 function SourcesSettings({ state, onState, onNotice }: { state: AppState; onState: (state: AppState) => void; onNotice: (message: string) => void }) {
   const [url, setUrl] = useState('');
   const [candidates, setCandidates] = useState<SourceCandidate[]>([]);
+  const [planeProjects, setPlaneProjects] = useState<SourceCandidate[]>([]);
+  const [loadingPlaneProjects, setLoadingPlaneProjects] = useState(false);
   const [candidate, setCandidate] = useState<SourceCandidate | null>(null);
   const [mapping, setMapping] = useState<SourceConfig['mapping']>({ title: '', due: null, status: '', complete: '', reopen: '' });
   const [resolving, setResolving] = useState(false);
@@ -593,10 +682,22 @@ function SourcesSettings({ state, onState, onNotice }: { state: AppState; onStat
   const [savingColor, setSavingColor] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const planeConnection = state.connections?.plane;
+
+  useEffect(() => {
+    if (!apiAvailable() || !planeConnection?.connected) { setPlaneProjects([]); return undefined; }
+    let active = true;
+    setLoadingPlaneProjects(true);
+    void window.desktop.listPlaneProjects(planeConnection.workspaceSlug, planeConnection.baseUrl)
+      .then((next) => { if (active) setPlaneProjects(next); })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Unable to load Plane projects.'); })
+      .finally(() => { if (active) setLoadingPlaneProjects(false); });
+    return () => { active = false; };
+  }, [planeConnection?.connected, planeConnection?.workspaceSlug, planeConnection?.baseUrl]);
   async function resolve() {
     if (!apiAvailable() || !url.trim()) return;
     setResolving(true); setError(null);
-    try { const next = await window.desktop.resolveSource(url.trim()); setCandidates(next); if (next.length === 1) choose(next[0]); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to resolve that Notion URL.'); } finally { setResolving(false); }
+    try { const next = await window.desktop.resolveSource(url.trim()); setCandidates(next); if (next.length === 1) choose(next[0]); } catch (reason) { setError(reason instanceof Error ? reason.message : 'Unable to resolve that Notion or Plane URL.'); } finally { setResolving(false); }
   }
   function choose(next: SourceCandidate) { setCandidate(next); setCandidates([]); setEditingId(state.sources.find((source) => source.databaseId === next.databaseId)?.id ?? null); setMapping(autoMapping(next)); }
   function remap(source: SourceConfig) { setCandidate(source); setEditingId(source.id); setMapping(source.mapping); setCandidates([]); setError(null); }
@@ -621,12 +722,13 @@ function SourcesSettings({ state, onState, onNotice }: { state: AppState; onStat
     try { onState(await window.desktop.removeSource(source.id)); onNotice('Source removed.'); } catch (reason) { onNotice(reason instanceof Error ? reason.message : 'Unable to remove this source.'); }
   }
   const statusProperty = candidate?.properties.find((property) => property.id === mapping.status);
-  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Sources</span><h2>Choose the databases you work from</h2><p>Paste a Notion database URL to discover available properties. Mapping uses property IDs so renamed columns stay connected.</p></div><div className="add-source-card"><div className="source-url-row"><div className="url-input"><FolderOpen size={16} /><input aria-label="Notion database URL" placeholder="https://www.notion.so/…" value={url} onChange={(event) => setUrl(event.target.value)} /><button className="button button-primary" disabled={resolving || !state.connected || !url.trim()} onClick={() => void resolve()}>{resolving ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}{resolving ? 'Resolving…' : 'Add source'}</button></div></div>{!state.connected ? <p className="muted form-note">Connect Notion before adding a database.</p> : null}{error ? <p className="form-error">{error}</p> : null}{candidates.length > 1 ? <div className="candidate-list"><strong>Choose a database</strong>{candidates.map((item) => <button key={item.id} className="candidate" onClick={() => choose(item)}><Database size={16} /><span><b>{item.name}</b><small>{item.properties.length} properties · {item.databaseId}</small></span><ChevronDown size={15} /></button>)}</div> : null}{candidate ? <MappingEditor candidate={candidate} mapping={mapping} setMapping={setMapping} statusProperty={statusProperty} editing={Boolean(editingId)} saving={saving} onSave={() => void save()} onCancel={() => { setCandidate(null); setEditingId(null); }} /> : null}</div><div className="source-cards">{state.sources.map((source) => { const tagColor = sourceColor(source.id, source.color); return <div className="source-card" key={source.id}><div className="source-card-main"><span className={`source-dot ${tagColor}`} /><div><strong>{source.name}</strong><span>{source.databaseId}</span>{state.sync.errors[source.id] ? <em>{state.sync.errors[source.id]}</em> : null}</div></div><div className="source-card-actions"><div className="source-color-picker" role="group" aria-label={`Tag color for ${source.name}`}>{SOURCE_COLORS.map((color) => <button type="button" key={color} className={`source-color-option ${color} ${tagColor === color ? 'selected' : ''}`} aria-label={`Use ${color} tag color`} aria-pressed={tagColor === color} title={`${color[0].toUpperCase()}${color.slice(1)} tag`} disabled={savingColor === source.id} onClick={() => void changeColor(source, color)}><span className={`source-dot ${color}`} /></button>)}</div><button className="button button-secondary" onClick={() => remap(source)}>Remap</button><button className="icon-button danger" aria-label={`Remove ${source.name}`} onClick={() => void remove(source)}><Trash2 size={16} /></button></div></div>; })}{!state.sources.length ? <div className="empty-settings"><Database size={20} /><span>No sources yet. Add a shared Notion database above.</span></div> : null}</div></section>;
+  return <section className="settings-section"><div className="settings-intro"><span className="eyebrow">Sources</span><h2>Choose the databases and projects you work from</h2><p>Paste a Notion database URL or Plane project URL to discover available fields. Mapping uses provider field IDs so renamed columns and status states stay connected.</p></div><div className="add-source-card">{planeConnection?.connected ? <div className="plane-project-picker"><label><span>Plane project</span><select aria-label="Plane project" value="" onChange={(event) => { const selected = planeProjects.find((item) => item.id === event.target.value); if (selected) choose(selected); }} disabled={loadingPlaneProjects || !planeProjects.length}><option value="">{loadingPlaneProjects ? 'Loading projects…' : planeProjects.length ? 'Choose a project…' : 'No projects found'}</option>{planeProjects.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><small>Select a project to configure its title, target date, and state mapping.</small></div> : null}<div className="source-url-row"><div className="url-input"><FolderOpen size={16} /><input aria-label="Notion database or Plane project URL" placeholder="https://www.notion.so/… or https://app.plane.so/…" value={url} onChange={(event) => setUrl(event.target.value)} /><button className="button button-primary" disabled={resolving || !state.connected || !url.trim()} onClick={() => void resolve()}>{resolving ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}{resolving ? 'Resolving…' : 'Add source'}</button></div></div>{!state.connected ? <p className="muted form-note">Connect Notion or Plane before adding a source.</p> : null}{error ? <p className="form-error">{error}</p> : null}{candidates.length > 1 ? <div className="candidate-list"><strong>Choose a database or project</strong>{candidates.map((item) => <button key={item.id} className="candidate" onClick={() => choose(item)}>{providerOf(item) === 'plane' ? <Layers size={16} /> : <Database size={16} />}<span><b>{item.name}</b><small>{providerLabel(providerOf(item))} · {item.properties.length} fields · {item.databaseId}</small></span><ChevronDown size={15} /></button>)}</div> : null}{candidate ? <MappingEditor candidate={candidate} mapping={mapping} statusProperty={statusProperty} setMapping={setMapping} editing={Boolean(editingId)} saving={saving} onSave={() => void save()} onCancel={() => { setCandidate(null); setEditingId(null); }} /> : null}</div><div className="source-cards">{state.sources.map((source) => { const tagColor = sourceColor(source.id, source.color); const provider = providerOf(source); return <div className="source-card" key={source.id}><div className="source-card-main"><span className={`source-dot ${tagColor}`} /><div><strong>{source.name}</strong><span>{providerLabel(provider)} · {provider === 'plane' ? `${(source as ProviderSource).workspaceSlug ?? 'workspace'} / ${(source as ProviderSource).projectId ?? source.databaseId}` : source.databaseId}</span>{state.sync.errors[source.id] ? <em>{state.sync.errors[source.id]}</em> : null}</div></div><div className="source-card-actions"><div className="source-color-picker" role="group" aria-label={`Tag color for ${source.name}`}>{SOURCE_COLORS.map((color) => <button type="button" key={color} className={`source-color-option ${color} ${tagColor === color ? 'selected' : ''}`} aria-label={`Use ${color} tag color`} aria-pressed={tagColor === color} title={`${color[0].toUpperCase()}${color.slice(1)} tag`} disabled={savingColor === source.id} onClick={() => void changeColor(source, color)}><span className={`source-dot ${color}`} /></button>)}</div><button className="button button-secondary" onClick={() => remap(source)}>Remap</button><button className="icon-button danger" aria-label={`Remove ${source.name}`} onClick={() => void remove(source)}><Trash2 size={16} /></button></div></div>; })}{!state.sources.length ? <div className="empty-settings"><Database size={20} /><span>No sources yet. Add a Notion database or Plane project above.</span></div> : null}</div></section>;
 }
 
 function MappingEditor({ candidate, mapping, setMapping, statusProperty, editing, saving, onSave, onCancel }: { candidate: SourceCandidate; mapping: SourceConfig['mapping']; setMapping: (mapping: SourceConfig['mapping']) => void; statusProperty?: SourceCandidate['properties'][number]; editing: boolean; saving: boolean; onSave: () => void; onCancel: () => void }) {
   const set = (key: keyof SourceConfig['mapping']) => (value: string) => setMapping({ ...mapping, [key]: value });
-  return <div className="mapping-editor"><div className="mapping-heading"><div><span className="eyebrow">{editing ? 'Remap source' : 'Confirm mapping'}</span><strong>{candidate.name}</strong></div><button className="icon-button" aria-label="Cancel mapping" onClick={onCancel}><X size={16} /></button></div><p className="muted">Notion Tasks detected these fields. Confirm the exact properties before syncing.</p><div className="mapping-grid"><label>Title property<select value={mapping.title} onChange={(event) => set('title')(event.target.value)}><option value="">Choose property</option>{candidate.properties.filter((property) => property.type === 'title' || property.type === 'rich_text').map((property) => <option key={property.id} value={property.id}>{property.name} · {property.type}</option>)}</select></label><label>Due date<select value={mapping.due ?? ''} onChange={(event) => setMapping({ ...mapping, due: event.target.value || null })}><option value="">No due date</option>{candidate.properties.filter((property) => property.type === 'date').map((property) => <option key={property.id} value={property.id}>{property.name} · {property.type}</option>)}</select></label><label>Status property<select value={mapping.status} onChange={(event) => set('status')(event.target.value)}><option value="">Choose property</option>{candidate.properties.filter((property) => property.type === 'status' || property.type === 'select').map((property) => <option key={property.id} value={property.id}>{property.name} · {property.type}</option>)}</select></label><label>Complete option<select value={mapping.complete} onChange={(event) => set('complete')(event.target.value)}><option value="">Choose option</option>{statusProperty?.options?.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}<option value="true">true</option><option value="false">false</option></select></label><label>Reopen option<select value={mapping.reopen} onChange={(event) => set('reopen')(event.target.value)}><option value="">Choose option</option>{statusProperty?.options?.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}<option value="true">true</option><option value="false">false</option></select></label></div><div className="mapping-preview"><span>Property preview</span>{candidate.properties.map((property) => <div key={property.id}><code>{property.id}</code><strong>{property.name}</strong><small>{property.type}{property.options?.length ? ` · ${property.options.length} options` : ''}</small></div>)}</div><div className="mapping-actions"><button className="button button-secondary" onClick={onCancel}>Cancel</button><button className="button button-primary" disabled={saving} onClick={onSave}>{saving ? 'Saving…' : editing ? 'Save remapping' : 'Save source'}</button></div></div>;
+  const provider = providerOf(candidate);
+  return <div className="mapping-editor"><div className="mapping-heading"><div><span className="eyebrow">{editing ? 'Remap source' : 'Confirm mapping'}</span><strong>{candidate.name}</strong></div><button className="icon-button" aria-label="Cancel mapping" onClick={onCancel}><X size={16} /></button></div><p className="muted">{providerLabel(provider)} fields were detected. Confirm the title, due date, and status mapping before syncing.</p><div className="mapping-grid"><label>Title property<select value={mapping.title} onChange={(event) => set('title')(event.target.value)}><option value="">Choose property</option>{candidate.properties.filter((property) => property.type === 'title' || property.type === 'rich_text' || provider === 'plane' && ['text', 'name'].includes(property.type)).map((property) => <option key={property.id} value={property.id}>{property.name} · {property.type}</option>)}</select></label><label>Due date<select value={mapping.due ?? ''} onChange={(event) => setMapping({ ...mapping, due: event.target.value || null })}><option value="">No due date</option>{candidate.properties.filter((property) => property.type === 'date' || property.type === 'datetime').map((property) => <option key={property.id} value={property.id}>{property.name} · {property.type}</option>)}</select></label><label>Status property<select value={mapping.status} onChange={(event) => set('status')(event.target.value)}><option value="">Choose property</option>{candidate.properties.filter((property) => property.type === 'status' || property.type === 'select' || provider === 'plane' && ['state', 'choice'].includes(property.type)).map((property) => <option key={property.id} value={property.id}>{property.name} · {property.type}</option>)}</select></label><label>Complete option<select value={mapping.complete} onChange={(event) => set('complete')(event.target.value)}><option value="">Choose option</option>{statusProperty?.options?.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}<option value="true">true</option><option value="false">false</option></select></label><label>Reopen option<select value={mapping.reopen} onChange={(event) => set('reopen')(event.target.value)}><option value="">Choose option</option>{statusProperty?.options?.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}<option value="true">true</option><option value="false">false</option></select></label></div><div className="mapping-preview"><span>{providerLabel(provider)} field preview</span>{candidate.properties.map((property) => <div key={property.id}><code>{property.id}</code><strong>{property.name}</strong><small>{property.type}{property.options?.length ? ` · ${property.options.length} options` : ''}</small></div>)}</div><div className="mapping-actions"><button className="button button-secondary" onClick={onCancel}>Cancel</button><button className="button button-primary" disabled={saving} onClick={onSave}>{saving ? 'Saving…' : editing ? 'Save remapping' : 'Save source'}</button></div></div>;
 }
 
 function PreferenceSettings({ state, onState, onNotice }: { state: AppState; onState: (state: AppState) => void; onNotice: (message: string) => void }) {
