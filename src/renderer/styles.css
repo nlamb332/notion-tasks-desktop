@@ -100,6 +100,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .sync-banner > button { margin-left: auto; border: 0; background: transparent; color: var(--blue); display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .sync-banner.has-errors details + button { margin-left: 12px; }
 .filter-bar { display: flex; align-items: end; gap: 10px; padding: 14px 30px 0; flex-wrap: wrap; }
+.owner-filter-hint { order: 1; flex-basis: 100%; color: var(--muted); font-size: 11px; }
+.compact-owner-filter { padding: 7px 12px; border-bottom: 1px solid var(--line); }
+.compact-owner-filter label { display: flex; align-items: center; gap: 8px; font-size: 11px; }
+.compact-owner-filter select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 5px; background: var(--panel); color: var(--text); }
+.compact-owner-filter small { display: block; color: var(--muted); margin-top: 4px; font-size: 10px; }
 .filter-bar label { display: grid; gap: 5px; color: #8592a4; font-size: 10px; font-weight: 600; }
 .filter-bar select, .filter-bar input, .mapping-grid select, .property-content select, .property-content input, .compact-toolbar select { border: 1px solid var(--line); color: var(--text); border-radius: 6px; background: white; padding: 7px 8px; min-width: 108px; outline: 0; }
 .filter-clear { border: 0; padding: 8px 4px; color: var(--blue); background: transparent; font-size: 11px; }

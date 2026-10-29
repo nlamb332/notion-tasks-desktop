@@ -24,19 +24,25 @@ try {
     const project = { id: projectId, name: 'Plane fixture', identifier: 'FIX' };
     const f = globalThis.__planeFixture = {
       project, states, offline: false, writes: [], next: 1,
-      items: { [itemId]: { id: itemId, project: projectId, name: 'Review Plane integration', state: 'open', target_date: '2026-10-29', updated_at: '2026-10-28T10:00:00Z', sequence_id: 1 } },
+      items: { [itemId]: { id: itemId, project: projectId, name: 'Review Plane integration', assignees: ['noah'], state: 'open', target_date: '2026-10-29', updated_at: '2026-10-28T10:00:00Z', sequence_id: 1 } },
     };
     globalThis.fetch = async (input, init = {}) => {
       const url = new URL(String(input));
       const method = init.method || 'GET';
       const reply = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
       if (url.origin === 'https://api.notion.com' && url.pathname === '/v1/users/me') return reply({ id: 'notion-fixture-user' });
+      if (url.origin === 'https://api.notion.com' && url.pathname.startsWith('/v1/data_sources/')) {
+        const sourceId = '44444444-4444-4444-8444-444444444444';
+        if (url.pathname.endsWith('/query')) return reply({ results: [{ id: '55555555-5555-4555-8555-555555555555', url: 'https://www.notion.so/55555555555545558555555555555555', last_edited_time: '2026-10-28T10:00:00Z', parent: { data_source_id: sourceId }, properties: { title: { id: 'title', type: 'title', title: [{ plain_text: 'Notion without owner' }] }, status: { id: 'status', type: 'select', select: { id: 'open', name: 'Open' } } } }], has_more: false });
+        return reply({ id: sourceId, parent: { database_id: '66666666-6666-4666-8666-666666666666' }, title: [{ plain_text: 'Notion no owner' }], properties: { title: { id: 'title', name: 'Name', type: 'title', title: {} }, status: { id: 'status', name: 'Status', type: 'select', select: { options: [{ id: 'open', name: 'Open' }, { id: 'done', name: 'Done' }] } } } });
+      }
       if (url.origin !== 'https://api.plane.so') throw new Error('Unexpected network request');
       if (init.headers?.['X-API-Key'] !== 'plane-fixture-key') throw new Error('Missing Plane authentication header');
       if (f.offline) return reply({ detail: 'Fixture unavailable' }, 503);
       const route = url.pathname.replace(/^\/api\/v1/, '');
       const collection = values => reply({ results: values, next_page_results: false, next_cursor: '' });
       if (route === '/users/me/') return reply({ id: 'plane-fixture-user' });
+      if (route === '/workspaces/fixture/members/') return collection([{ id: 'noah', display_name: 'noah.lamb' }]);
       if (route === '/workspaces/fixture/projects/') return collection([project]);
       if (route === `/workspaces/fixture/projects/${projectId}/`) return reply(project);
       if (route === `/workspaces/fixture/projects/${projectId}/states/`) return collection(states);
@@ -70,6 +76,7 @@ try {
   await page.getByRole('button', { name: 'Sources', exact: true }).click();
   await expect(page.getByRole('combobox', { name: 'Plane project', exact: true })).toBeEnabled();
   await page.getByRole('combobox', { name: 'Plane project', exact: true }).selectOption({ label: 'Plane fixture' });
+  await expect(page.getByRole('combobox', { name: 'Owner field', exact: true })).toHaveValue('assignees');
   await page.getByRole('button', { name: 'Save source', exact: true }).click();
   await expect(page.locator('.source-card')).toHaveCount(1);
   await page.screenshot({ path: path.join(root, '.cache', 'plane-setup.png') });
@@ -103,8 +110,23 @@ try {
   await expect(page.locator('.draft-panel input[type="time"]')).toBeDisabled();
   await page.getByRole('button', { name: 'Create task', exact: true }).click();
   await page.getByRole('button', { name: 'Open Created in Plane interface', exact: true }).waitFor();
+  await page.evaluate(async () => {
+    await window.desktop.connect('notion-fixture-key');
+    await window.desktop.saveSource({ id: '44444444-4444-4444-8444-444444444444', databaseId: '66666666-6666-4666-8666-666666666666', name: 'Notion no owner', properties: [{ id: 'title', name: 'Name', type: 'title' }, { id: 'status', name: 'Status', type: 'select', options: [{ id: 'open', name: 'Open' }, { id: 'done', name: 'Done' }] }], mapping: { title: 'title', due: null, status: 'status', complete: 'done', reopen: 'open' } });
+  });
+  await page.getByRole('button', { name: 'Close task details', exact: true }).click();
+  await page.getByRole('button', { name: 'Filter tasks', exact: true }).click();
+  await page.getByRole('combobox', { name: 'Owner filter', exact: true }).selectOption({ label: 'noah.lamb' });
+  await expect(page.getByRole('button', { name: 'Open Notion without owner', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Plane task revised', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Created in Plane interface', exact: true })).toHaveCount(0);
+  await page.screenshot({ path: path.join(root, '.cache', 'owner-filter-full.png') });
   await page.evaluate(() => window.desktop.setSettings({ compact: true }));
   await expect(page.locator('.compact-shell')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open Created in Plane interface', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Open Notion without owner', exact: true })).toBeVisible();
+  await page.screenshot({ path: path.join(root, '.cache', 'owner-filter-compact.png') });
+  await page.getByRole('combobox', { name: 'Compact owner filter', exact: true }).selectOption('');
   await expect(page.getByRole('button', { name: 'Open Created in Plane interface', exact: true })).toBeVisible();
   await page.screenshot({ path: path.join(root, '.cache', 'plane-compact.png') });
   await page.evaluate(() => window.desktop.setSettings({ compact: false }));
@@ -122,7 +144,7 @@ try {
   const disconnected = await page.evaluate(() => window.desktop.getState());
   assert.equal(disconnected.connected, true);
   assert.equal(disconnected.sync.onlineSources.includes(source.id), false);
-  assert.equal(disconnected.tasks.length, 2);
+  assert.equal(disconnected.tasks.length, 3);
   await assert.rejects(page.evaluate(task => window.desktop.updateTask(task.id, { name: 'Offline edit' }, task), conflict.task), /offline|connect/i);
   const persisted = await readFile(path.join(data, 'state.json'), 'utf8');
   assert.ok(!persisted.includes('plane-fixture-key'));
@@ -130,7 +152,7 @@ try {
   assert.equal(savedSource.provider, 'plane');
   assert.equal(savedSource.workspaceSlug, 'fixture');
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ result: 'PASS', checks: ['Plane bridge authentication', 'project discovery', 'task display', 'date-only editing', 'complete and reopen', 'create through interface', 'compact view', 'conflict protection', 'independent disconnect', 'offline write blocked', 'provider metadata persisted', 'no plaintext key in state'], data, screenshots: ['.cache/plane-details.png', '.cache/plane-compact.png'] }, null, 2));
+  console.log(JSON.stringify({ result: 'PASS', checks: ['Plane bridge authentication', 'project discovery', 'optional owner mapping', 'task display', 'date-only editing', 'complete and reopen', 'create through interface', 'owner filter retains unmapped Notion source', 'owner filtering in compact view', 'conflict protection', 'independent disconnect', 'offline write blocked', 'provider metadata persisted', 'no plaintext key in state'], data, screenshots: ['.cache/owner-filter-full.png', '.cache/owner-filter-compact.png'] }, null, 2));
 } finally {
   await app.close();
 }

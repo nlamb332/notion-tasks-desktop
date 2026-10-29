@@ -6,10 +6,20 @@ export type SourceProvider = "notion" | "plane";
 export interface ConnectionConfig { provider: SourceProvider; token: string; baseUrl?: string; workspaceSlug?: string }
 export interface PlaneConnectionInput { apiKey: string; workspaceSlug: string; baseUrl?: string }
 export interface ProviderConnectionState { connected: boolean; baseUrl?: string; workspaceSlug?: string }
-export interface Task { id: string; sourceId: string; name: string; url: string; due: TaskDate; status: string; completed: boolean; lastEdited: string }
+export interface TaskOwner { id: string; name: string }
+export function cleanTaskOwners(value: unknown): TaskOwner[] {
+ if (!Array.isArray(value)) return [];
+ const owners = new Map<string, TaskOwner>();
+ for (const item of value) {
+  if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id) continue;
+  owners.set(item.id, { id: item.id, name: typeof item.name === 'string' && item.name.trim() ? item.name : item.id });
+ }
+ return [...owners.values()];
+}
+export interface Task { id: string; sourceId: string; name: string; url: string; due: TaskDate; status: string; completed: boolean; lastEdited: string; owners?: TaskOwner[] }
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
 export interface SourceCandidate { id: string; databaseId: string; name: string; properties: PropertyInfo[]; provider?: SourceProvider; workspaceSlug?: string; projectId?: string; baseUrl?: string }
-export interface SourceConfig extends SourceCandidate { color?: SourceColor; mapping: { title: string; due: string | null; status: string; complete: string; reopen: string } }
+export interface SourceConfig extends SourceCandidate { color?: SourceColor; mapping: { title: string; due: string | null; status: string; complete: string; reopen: string; owner?: string | null } }
 export interface DesktopSettings { compact: boolean; showOverdue?: boolean; alwaysOnTop: boolean; launchAtLogin: boolean; selectedList: string; lastSourceId: string; theme?: ThemePreference; bounds?: { x: number; y: number; width: number; height: number }; fullBounds?: { x: number; y: number; width: number; height: number }; compactBounds?: { x: number; y: number; width: number; height: number } }
 export interface SyncState { syncing: boolean; lastSync: string | null; errors: Record<string, string>; onlineSources: string[] }
 export interface AppState { connected: boolean; sources: SourceConfig[]; tasks: Task[]; stars: string[]; settings: DesktopSettings; sync: SyncState; connections?: Partial<Record<SourceProvider, ProviderConnectionState>> }

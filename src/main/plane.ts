@@ -181,6 +181,7 @@ export class PlaneService {
   private readonly maxRetries: number;
   private readonly maxRetryDelayMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
+  private readonly ownerDirectory = new Map<string, { loaded: number; people: JsonRecord[] }>();
 
   constructor(token: string, fetchImpl: FetchImpl = globalThis.fetch, options: PlaneServiceOptions = {}) {
     this.token = token.trim();
@@ -315,6 +316,7 @@ export class PlaneService {
     const properties: PropertyInfo[] = [
       { id: "name", name: "Name", type: "title" },
       { id: "target_date", name: "Target date", type: "date" },
+      { id: "assignees", name: "Assignees", type: "people" },
       { id: "state", name: "State", type: "status", options: stateOptions(states) },
     ];
     return { id, databaseId: projectId, projectId, provider: "plane", workspaceSlug, baseUrl, name: text(project.name || project.identifier || projectId), properties };
@@ -325,6 +327,8 @@ export class PlaneService {
     const mapping = "mapping" in source && source.mapping ? source.mapping : inferMapping((candidate.properties.find((property) => property.id === "state")?.options || []).map((option) => ({ ...option })));
     if (mapping.title !== "name" || mapping.status !== "state" || (mapping.due !== null && mapping.due !== "target_date")) throw new PlaneSchemaChangedError(candidate.id, "The Plane project mapping is invalid; remap its name, target date, or state fields.");
     const options = candidate.properties.find((property) => property.id === "state")?.options || [];
+    if (mapping.owner && mapping.owner !== "assignees") throw new PlaneSchemaChangedError(candidate.id, "Choose Assignees as the Plane owner field.");
+    if (mapping.owner) await this.loadOwnerDirectory(parts.workspaceSlug);
     if (!options.some((option) => option.id === mapping.complete || option.name === mapping.complete) || !options.some((option) => option.id === mapping.reopen || option.name === mapping.reopen)) throw new PlaneSchemaChangedError(candidate.id, "The Plane project states changed; remap its complete and reopen states.");
     return { candidate, mapping };
   }
@@ -363,11 +367,39 @@ export class PlaneService {
       status: stateName,
       completed,
       lastEdited: text(item.updated_at || item.last_activity_at || item.created_at) || new Date().toISOString(),
+      ...(mapping.owner ? { owners: (Array.isArray(item.assignees) ? item.assignees : []).map((value: unknown) => {
+        const id = typeof value === "string" ? value : isRecord(value) ? text(value.id) : "";
+        const person = this.ownerDirectory.get(parts.workspaceSlug)?.people.find((person) => text(person.id) === id) || (isRecord(value) ? value : {});
+        return { id, name: text(person.display_name || person.name || [person.first_name, person.last_name].filter(Boolean).join(" ") || person.email || id) };
+      }).filter((owner: { id: string }) => owner.id) } : {}),
     };
   }
 
   private path(parts: { workspaceSlug: string; projectId: string }, suffix: string): string {
     return `/workspaces/${encodeURIComponent(parts.workspaceSlug)}/projects/${encodeURIComponent(parts.projectId)}${suffix}`;
+  }
+
+  private async loadOwnerDirectory(workspaceSlug: string): Promise<void> {
+    const cached = this.ownerDirectory.get(workspaceSlug);
+    if (cached && Date.now() - cached.loaded < 60_000) return;
+    try {
+      const people: JsonRecord[] = [];
+      const seen = new Set<string>();
+      let cursor: string | undefined;
+      do {
+        const query = new URLSearchParams({ per_page: "100" });
+        if (cursor) query.set("cursor", cursor);
+        const result = await this.request(`/workspaces/${encodeURIComponent(workspaceSlug)}/members/?${query}`);
+        people.push(...pageResults(result));
+        cursor = pageCursor(result);
+        if (cursor && seen.has(cursor)) break;
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+      this.ownerDirectory.set(workspaceSlug, { loaded: Date.now(), people });
+    } catch {
+      // Task access can be available even when the key cannot read the roster.
+      this.ownerDirectory.set(workspaceSlug, { loaded: Date.now(), people: cached?.people ?? [] });
+    }
   }
 
   private parseProjectUrl(value: string): { workspaceSlug?: string; projectId?: string } {

@@ -13,6 +13,8 @@ A personal Windows desktop task app with a full list view and compact floating w
 
 ### Plane (optional)
 
+Sources support an optional **Owner field** mapping (Plane Assignees or a Notion people property). Filter by Owner in full and compact views. Sources without an owner mapping stay visible while the filter is active.
+
 See [Plane integration](PLANE_INTEGRATION.md) for the architecture, local key file, and complete testing/setup steps.
 
 Plane projects can be connected alongside Notion. Create a Plane API key with project read/write access, then enter the key, workspace slug, and (for self-hosted Plane) the API base URL in **Settings → Connection**. Paste a project link such as `https://app.plane.so/my-workspace/projects/<project-id>/` in **Settings → Sources**, select the project, and confirm its Name, Target date, and State mappings. Plane uses the documented v1 work-item API and sends API keys only from the Electron main process; the key is encrypted with Windows-backed Electron `safeStorage` and is removed when Plane is disconnected.

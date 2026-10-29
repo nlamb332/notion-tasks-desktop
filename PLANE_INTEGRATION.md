@@ -14,11 +14,13 @@ The tracked `.env.example` can recreate this local file. The app does not automa
 
 ## Connect in the app
 
-The Plane preview uses version `0.1.7-rc.1` on `codex/plane-preview`. Build its separate Windows installer with `npm run package:preview`; the output is `release-preview/0.1.7-rc.1/Notion-Tasks-Preview-Setup-0.1.7-rc.1.exe`. It installs as **Notion Tasks Preview** with its own settings and encrypted credentials, so enter the Plane connection in that app after installing.
+The owner-filtering preview uses version `0.1.7-rc.2` on `codex/plane-preview`. Build its separate Windows installer with `npm run package:preview`; the output is `release-preview/0.1.7-rc.2/Notion-Tasks-Preview-Setup-0.1.7-rc.2.exe`. It installs as **Notion Tasks Preview** with its own settings and encrypted credentials, so enter the Plane connection in that app after installing.
 
 Run `npm run dev`, then open **Settings → Connection**. Enter the Plane API key, workspace slug, and API base URL; choose **Connect Plane**. Open **Sources**, select a Plane project, and confirm its complete and reopen states before saving the source. You can also paste a project URL.
 
 Select a task to edit its title, status, or target date. Create tasks with **Add task**, and use the completion control to complete or reopen them. Plane target dates contain a calendar date only, so time inputs are disabled. **Open in Plane** opens the original work item. Stars and source colors stay local.
+
+In Sources → Remap, optionally select **Assignees** as the Plane **Owner field**, or a Notion people property if available. Existing mappings remain compatible; choose the owner field once for an existing source, then save and refresh. The **Owner** filter is available in the full view's filter bar and in compact mode. It matches any owner on a task. Sources without an owner mapping always remain visible under this filter; unassigned tasks in a mapped source appear when **All owners** is selected. Owner mapping reads assignments for display and filtering; task edits do not change assignments.
 
 ## Implementation
 

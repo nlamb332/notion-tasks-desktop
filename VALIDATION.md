@@ -5,7 +5,7 @@ The desktop shell, Notion and Plane adapters, and renderer are checked by automa
 ## Verified
 
 - `npm run typecheck`: passes.
-- `npm test`: 61 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, and desktop synchronization contracts.
+- `npm test`: 68 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, and desktop synchronization contracts.
 - `npm run build`: production renderer and Electron bundles build successfully.
 - `npm run test:desktop`: shell, Notion integration, Plane integration, and updater suites pass in real Electron using isolated workspace-local user-data directories and synthetic API responses.
 - `node scripts/smoke.mjs --dev`: the Vite development renderer and Electron bridge pass the same shell smoke checks. Production retains its strict content policy; the development URL is limited to unpackaged loopback HTTP.
@@ -24,6 +24,8 @@ Version 0.1.1 adds inline header sync status, task drafts with due dates before 
 Version 0.1.2 defaults new Today-list drafts to the current local date. Desktop regression checks verify full and compact Today entry points, an editable suggested date, and blank defaults in All Tasks.
 
 ## Remaining verification requiring local setup
+
+Owner filtering is verified with multi-owner tasks, other-owner and unassigned tasks, legacy sources without owner mappings, provider/server identity isolation, Notion people extraction, Plane roster names, and persisted cached owners. The desktop suite selects an owner in the visible full and compact filters and confirms that an unmapped Notion source stays visible while unmatched mapped-source tasks are hidden.
 
 Plane desktop checks exercise the visible connection form, project discovery and mapping, task display, title and date edits, completion/reopening, UI creation, compact mode, conflict protection, independent disconnect, and blocked offline edits. Plane setup/details screenshots were visually inspected. Desktop-test responses are synthetic. Live read-only project, member, and assigned-task retrieval also succeeded against the configured self-hosted Plane server; no live Plane work items were changed. A real write cycle should use a disposable task. See [Plane integration](PLANE_INTEGRATION.md).
 

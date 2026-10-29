@@ -26,6 +26,16 @@ function storage() {
 }
 
 describe("provider persistence", () => {
+  it("preserves owner mappings and cached people across restart", () => {
+    const { directory, persistence } = storage();
+    const data = defaultPersistedData();
+    data.sources = [{ id: "source", databaseId: "db", name: "Tasks", properties: [], mapping: { title: "title", due: null, status: "status", complete: "done", reopen: "open", owner: "people" } }];
+    data.tasks = [{ id: "task", sourceId: "source", name: "Task", url: "", due: null, status: "Open", completed: false, lastEdited: "", owners: [{ id: "person", name: "Noah" }] }];
+    persistence.save(data);
+    const saved = new AppPersistence(directory).load();
+    expect(saved.sources[0].mapping.owner).toBe("people");
+    expect(saved.tasks[0].owners).toEqual([{ id: "person", name: "Noah" }]);
+  });
   it("stores, reloads, and removes provider keys independently", () => {
     const { directory, persistence } = storage();
     persistence.saveToken("notion-test-key");

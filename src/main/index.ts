@@ -18,6 +18,7 @@ import { UpdateController } from "./updates";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
 import {
   SOURCE_COLORS,
+  cleanTaskOwners,
   type AppState,
   type ConnectionConfig,
   type DesktopSettings,
@@ -133,6 +134,7 @@ export function validateSourceConfig(source: SourceConfig): void {
   if (!Array.isArray(source.properties)) throw new Error(`Source ${source.name || source.id} has no schema`);
   const properties = propertyById(source);
   const mapping = source.mapping;
+  if (mapping?.owner && !isPropertyType(properties.get(mapping.owner), "people")) throw new Error(`Source ${source.name} owner mapping is no longer a people field`);
   if (!mapping || typeof mapping.title !== "string" || !mapping.title) throw new Error(`Source ${source.name} has no title mapping`);
   if (source.provider === "plane") {
     if (!source.workspaceSlug || !(source.projectId || source.databaseId)) throw new Error(`Source ${source.name} has incomplete Plane project metadata`);
@@ -204,6 +206,7 @@ function cleanTask(value: unknown, sourceId: string, provider: SourceProvider = 
     status: typeof item.status === "string" ? item.status : "",
     completed: typeof item.completed === "boolean" ? item.completed : false,
     lastEdited: typeof item.lastEdited === "string" ? item.lastEdited : new Date().toISOString(),
+    ...(Array.isArray(item.owners) ? { owners: cleanTaskOwners(item.owners) } : {}),
   };
 }
 

@@ -49,6 +49,16 @@ function serviceFor(routes: Record<string, Response | (() => Response)>) {
 }
 
 describe("PlaneService", () => {
+  it("reads multiple owners and resolves roster display names", async () => {
+    const { service } = serviceFor({
+      "GET /api/v1/workspaces/fixture/projects/project-1/": reply({ id: "project-1", name: "Fixture project" }),
+      "GET /api/v1/workspaces/fixture/projects/project-1/states/?per_page=100": reply(states),
+      "GET /api/v1/workspaces/fixture/members/?per_page=100": reply([{ id: "noah", display_name: "noah.lamb" }]),
+      "GET /api/v1/workspaces/fixture/projects/project-1/work-items/?per_page=100&expand=state": reply({ results: [{ id: "task", name: "Assigned", state: "state-open", assignees: ["noah", { id: "other", display_name: "Other" }] }], next_page_results: false }),
+    });
+    const [task] = await service.listTasks({ ...source, mapping: { ...source.mapping, owner: "assignees" } });
+    expect(task.owners).toEqual([{ id: "noah", name: "noah.lamb" }, { id: "other", name: "Other" }]);
+  });
   it("resolves a project URL and preserves project state mappings", async () => {
     const { service, fetchImpl } = serviceFor({
       "GET /api/v1/workspaces/fixture/projects/project-1/": reply({ id: "project-1", name: "Fixture project" }),

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeStorage } from "electron";
+import { cleanTaskOwners } from "../shared/types";
 import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type SourceProvider, type Task, type ThemePreference } from "../shared/types";
 
 export interface PersistedData {
@@ -95,6 +96,7 @@ function cleanSources(value: unknown): SourceConfig[] {
         status: mapping.status as string,
         complete: mapping.complete as string,
         reopen: mapping.reopen as string,
+        ...(mapping.owner === null || typeof mapping.owner === "string" ? { owner: mapping.owner } : {}),
       },
     });
   }
@@ -121,6 +123,7 @@ function cleanTasks(value: unknown): Task[] {
       status: item.status,
       completed: item.completed,
       lastEdited: item.lastEdited,
+      ...(Array.isArray(item.owners) ? { owners: cleanTaskOwners(item.owners) } : {}),
     });
     seen.add(`${item.sourceId}:${item.id}`);
   }
