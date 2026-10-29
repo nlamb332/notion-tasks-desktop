@@ -11,6 +11,16 @@ A personal Windows desktop task app with a full list view and compact floating w
 5. In the app, open **Settings → Connection**, enter the integration token locally, and connect.
 6. In **Settings → Sources**, paste a database or task-page link, inspect the suggested property mappings, and confirm them. Add further sources the same way.
 
+### Plane (optional)
+
+Sources support an optional **Owner field** mapping (Plane Assignees or a Notion people property). Filter by Owner in full and compact views. Sources without an owner mapping stay visible while the filter is active.
+
+See [Plane integration](PLANE_INTEGRATION.md) for the architecture, local key file, and complete testing/setup steps.
+
+Plane projects can be connected alongside Notion. Create a Plane API key with project read/write access, then enter the key, workspace slug, and (for self-hosted Plane) the API base URL in **Settings → Connection**. Paste a project link such as `https://app.plane.so/my-workspace/projects/<project-id>/` in **Settings → Sources**, select the project, and confirm its Name, Target date, and State mappings. Plane uses the documented v1 work-item API and sends API keys only from the Electron main process; the key is encrypted with Windows-backed Electron `safeStorage` and is removed when Plane is disconnected.
+
+For a local, read-only connectivity check, use the ignored `.env.plane.local` file (or copy `.env.example` to that name), set `PLANE_API_KEY` and `PLANE_WORKSPACE_SLUG`, optionally set `PLANE_PROJECT_ID`, and run `npm run test:plane`. It performs only project/state GET requests and never creates or updates Plane work items. The API endpoint shape and `X-API-Key` header follow [Plane's official API introduction](https://developers.plane.so/api-reference/introduction), [project listing](https://developers.plane.so/api-reference/project/list-projects), and [work-item reference](https://developers.plane.so/api-reference/issue/list-issues).
+
 Typical property mappings (examples only):
 
 | App field | Common Notion properties |

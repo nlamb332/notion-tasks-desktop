@@ -291,6 +291,7 @@ function pageTask(page: JsonRecord, source: SourceCandidate, mapping: SourceConf
     status,
     completed,
     lastEdited: String(page?.last_edited_time ?? ""),
+    ...(mapping.owner ? { owners: (propertyFromPage(page, mapping.owner)?.people ?? []).map((person: JsonRecord) => ({ id: String(person.id), name: String(person.name || person.person?.email || person.id) })) } : {}),
   };
 }
 
@@ -508,6 +509,7 @@ export class NotionService {
     const title = findProperty(properties, mapping.title);
     const status = findProperty(properties, mapping.status);
     const due = mapping.due ? findProperty(properties, mapping.due) : undefined;
+    if (mapping.owner && findProperty(properties, mapping.owner)?.type !== "people") throw new NotionSchemaChangedError(candidate.id, mapping, "The owner field changed; remap the source before syncing.");
     const invalid =
       !title || title.type !== "title" ||
       !status || !["status", "select", "checkbox"].includes(status.type) ||

@@ -9,6 +9,7 @@ export interface TaskFilters {
   from: string;
   to: string;
   important: boolean;
+  owner?: string;
 }
 
 const dayStart = (value: Date) => new Date(value.getFullYear(), value.getMonth(), value.getDate());
@@ -131,6 +132,8 @@ export function filterTasks(
     if (filters.sourceId && task.sourceId !== filters.sourceId) return false;
     if (filters.status && task.status !== filters.status) return false;
     if (filters.important && !stars.includes(task.id)) return false;
+    // An unmapped source has no owner concept and must remain visible.
+    if (filters.owner && source?.mapping.owner && !(task.owners ?? []).some((owner) => ownerFilterKey(owner.id, source) === filters.owner)) return false;
     if (normalizedQuery && !`${task.name} ${source?.name ?? ''} ${task.status}`.toLowerCase().includes(normalizedQuery)) return false;
     const due = taskStart(task);
     if (filters.from && (!due || due < new Date(`${filters.from}T00:00:00`))) return false;
@@ -165,6 +168,7 @@ export function autoMapping(source: Pick<SourceConfig, 'properties'>): SourceCon
   return {
     title: title?.id ?? '',
     due: due?.id ?? null,
+    owner: properties.find((property) => property.type === 'people')?.id ?? null,
     status: status?.id ?? '',
     complete: complete?.id ?? '',
     reopen: reopen?.id ?? '',
@@ -174,6 +178,20 @@ export function autoMapping(source: Pick<SourceConfig, 'properties'>): SourceCon
 export function sourceStatusOptions(source: SourceConfig | undefined) {
   if (!source) return [];
   return source.properties.find((property) => property.id === source.mapping.status)?.options ?? [];
+}
+
+export function ownerFilterKey(id: string, source: SourceConfig): string {
+  return JSON.stringify([source.provider ?? 'notion', source.provider === 'plane' ? (source.baseUrl ?? '').replace(/\/+$/, '').toLowerCase() : '', id]);
+}
+
+export function ownerFilterOptions(tasks: Task[], sources: SourceConfig[]): { value: string; label: string }[] {
+  const owners = new Map<string, string>();
+  for (const task of tasks) {
+    const source = sources.find((source) => source.id === task.sourceId);
+    if (!source?.mapping.owner) continue;
+    for (const owner of task.owners ?? []) owners.set(ownerFilterKey(owner.id, source), owner.name);
+  }
+  return [...owners].map(([value, label]) => ({ value, label })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 export type TaskStatusTone = 'complete' | 'progress' | 'blocked' | 'planned' | 'neutral';

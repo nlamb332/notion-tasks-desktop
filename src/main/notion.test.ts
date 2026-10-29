@@ -54,6 +54,16 @@ function serviceFor(routes: Record<string, Response | (() => Response)>, options
 }
 
 describe("NotionService", () => {
+  it("reads an optional people property as task owners", async () => {
+    const schema = sourceResponse();
+    const record = page("task", "Assigned");
+    const { service } = serviceFor({
+      "GET /v1/data_sources/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee": reply({ ...schema, properties: { ...schema.properties, owner: { id: "owner", name: "Owner", type: "people", people: {} } } }),
+      "POST /v1/data_sources/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/query": reply({ results: [{ ...record, properties: { ...record.properties, owner: { id: "owner", type: "people", people: [{ id: "person", name: "Noah" }] } } }], has_more: false }),
+    });
+    const [task] = await service.listTasks({ id: schema.id, databaseId: schema.parent.database_id, name: "Tasks", properties: [], mapping: { title: "title-id", due: "due-id", status: "status-id", complete: "done-id", reopen: "open-id", owner: "owner" } });
+    expect(task.owners).toEqual([{ id: "person", name: "Noah" }]);
+  });
   it("resolves a database URL into every data source", async () => {
     const { service } = serviceFor({
       "GET /v1/databases/11111111-2222-3333-4444-555555555555": reply({
