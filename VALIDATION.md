@@ -5,11 +5,15 @@ The desktop shell, Notion and Plane adapters, and renderer are checked by automa
 ## Verified
 
 - `npm run typecheck`: passes.
-- `npm test`: 68 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, and desktop synchronization contracts.
+- `npm test`: 79 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, desktop synchronization contracts, rolling-calendar scheduling, ICS validation, local approval, and backward-compatible planning persistence.
 - `npm run build`: production renderer and Electron bundles build successfully.
-- `npm run test:desktop`: shell, Notion integration, Plane integration, and updater suites pass in real Electron using isolated workspace-local user-data directories and synthetic API responses.
+- Earlier validation recorded the shell, Notion integration, Plane integration, and updater suites passing in real Electron using isolated workspace-local user-data directories and synthetic API responses. The post-feature rerun result is recorded below.
 - `node scripts/smoke.mjs --dev`: the Vite development renderer and Electron bridge pass the same shell smoke checks. Production retains its strict content policy; the development URL is limited to unpackaged loopback HTTP.
 - `npm audit`: zero known advisories after patched tool versions and the build-time proxy dependency override.
+
+Rolling-calendar unit coverage verifies a task placed into a gap between fixed events, leaf-only scheduling and estimate rollups, completed-child remaining effort, stale-plan rejection and idempotent approval, fixed-event conflict moves that remain uncommitted until approval, breakdown prerequisite blocking, spring DST working-hour capacity, manual-calendar completeness gating, recurrence rejection, transparent/cancelled events, malformed event intervals, and persistence migration from pre-planning state. `npm run typecheck`, `npm test`, and `npm run build` pass after this feature change.
+
+`npm run test:desktop` was attempted after the feature change but could not launch Electron in this environment: Playwright reported `Process failed to launch!` during the first shell smoke suite. The desktop suite therefore did not reach the Notion, Plane, or updater integration scripts in this run. The generated production bundles did build successfully.
 
 The desktop integration suite exercises synthetic Notion URL fixtures, multiple sources, deduplication, page identity, create through IPC and the visible UI, edit, native status completion/reopening, conflict handling, preservation of unmapped Status 1, partial-source failures, cached task retention, offline write blocking, local stars, encrypted credential storage, credential deletion on disconnect, and last-successful-sync persistence. Tests do not modify real Notion content.
 

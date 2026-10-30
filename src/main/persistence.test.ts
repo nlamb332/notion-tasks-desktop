@@ -26,6 +26,17 @@ function storage() {
 }
 
 describe("provider persistence", () => {
+  it("loads legacy state with empty planning defaults and preserves planning metadata", () => {
+    const { directory, persistence } = storage();
+    fs.writeFileSync(path.join(directory, "state.json"), JSON.stringify({ sources: [], tasks: [], stars: [], settings: {}, lastSync: null }));
+    expect(new AppPersistence(directory).load().planning.tasks).toEqual([]);
+    const data = defaultPersistedData();
+    data.planning.tasks = [{ ref: { provider: "notion", sourceId: "source", taskId: "task" }, estimateMinutes: 45, parent: null, stepOrder: 0, selected: true }];
+    data.planning.calendarImportedAt = "2026-10-30T12:00:00.000Z";
+    data.planning.blocks = [{ id: "owned-1", ref: data.planning.tasks[0].ref, start: "2026-11-02T15:00:00.000Z", end: "2026-11-02T15:45:00.000Z", approvedAt: "2026-10-30T12:00:00.000Z" }];
+    persistence.save(data);
+    expect(new AppPersistence(directory).load().planning).toMatchObject({ tasks: data.planning.tasks, calendarImportedAt: data.planning.calendarImportedAt, blocks: data.planning.blocks });
+  });
   it("preserves owner mappings and cached people across restart", () => {
     const { directory, persistence } = storage();
     const data = defaultPersistedData();

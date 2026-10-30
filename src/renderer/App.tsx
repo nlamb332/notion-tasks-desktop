@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { DateTime } from 'luxon';
 import {
   Archive,
   ArrowDownToLine,
@@ -8,6 +9,7 @@ import {
   ChevronDown,
   Clock3,
   CloudOff,
+  Download,
   Database,
   ExternalLink,
   Filter,
@@ -33,7 +35,7 @@ import {
   X,
 } from 'lucide-react';
 import { UpdateSettings } from './UpdateSettings';
-import { SOURCE_COLORS, type AppState, type PlaneConnectionInput, type SourceCandidate, type SourceColor, type SourceConfig, type SourceProvider, type Task, type TaskChanges, type TaskDate, type ThemePreference } from '../shared/types';
+import { SOURCE_COLORS, type AppState, type PlanProposal, type PlaneConnectionInput, type SourceCandidate, type SourceColor, type SourceConfig, type SourceProvider, type Task, type TaskChanges, type TaskDate, type TaskRef, type ThemePreference } from '../shared/types';
 import {
   autoMapping,
   dateInputValue,
@@ -52,7 +54,7 @@ import {
 import { useTaskCompletion } from './completion';
 import './styles.css';
 
-type ViewId = ListId | 'settings';
+type ViewId = ListId | 'settings' | 'planning';
 
 /** Provider metadata is shared by both integrations; legacy sources default to Notion. */
 type ProviderId = SourceProvider;
@@ -202,7 +204,7 @@ function App() {
   const counts = useMemo(() => state ? listCounts(state, state.settings.showOverdue) : undefined, [state]);
   const selectedTask = state?.tasks.find((task) => task.id === selectedTaskId) ?? null;
   const filteredTasks = useMemo(() => {
-    if (!state || activeView === 'settings') return [];
+    if (!state || activeView === 'settings' || activeView === 'planning') return [];
     return filterTasks(state.tasks, activeView, state.stars, filters, query, state.sources, new Date(), state.settings.showOverdue);
   }, [activeView, filters, query, state]);
   const statusOptions = useMemo(() => {
@@ -289,7 +291,7 @@ function App() {
       {state?.settings.compact && state.connected ? (
         <CompactView
           state={state}
-          activeView={activeView === 'settings' ? 'today' : activeView}
+          activeView={activeView === 'settings' || activeView === 'planning' ? 'today' : activeView}
           onView={(view) => chooseView(view)}
           owner={filters.owner}
           onOwner={(owner) => setFilters((current) => ({ ...current, owner }))}
@@ -330,7 +332,7 @@ function App() {
                 onState={setState}
                 onNotice={setNotice}
               />
-            ) : (
+            ) : activeView === 'planning' ? <PlanningView state={state} onState={setState} onNotice={setNotice} onSelectTask={selectTask} /> : (
               <>
                 {showFilters ? <FilterBar state={state} filters={filters} statusOptions={statusOptions} onFilters={setFilters} /> : null}
                 <TaskListHeader activeView={activeView} count={filteredTasks.length} showOverdue={Boolean(state.settings.showOverdue)} onShowOverdue={(showOverdue) => void setAppSettings({ showOverdue })} onAddTask={() => openDraft(filters.sourceId || state.settings.lastSourceId || state.sources[0]?.id || '')} canAddTask={state.sources.length > 0} />
@@ -346,7 +348,7 @@ function App() {
               </>
             )}
           </main>
-          {activeView !== 'settings' && draft ? <DraftPanel state={state} draft={draft} onCreate={createTask} onCreated={(task) => { setDraft(null); setSelectedTaskId(task.id); }} onClose={() => setDraft(null)} onNotice={setNotice} /> : activeView !== 'settings' && selectedTask ? <DetailPanel state={state} task={selectedTask} onState={setState} onClose={() => setSelectedTaskId(null)} onNotice={setNotice} /> : null}
+          {activeView !== 'settings' && activeView !== 'planning' && draft ? <DraftPanel state={state} draft={draft} onCreate={createTask} onCreated={(task) => { setDraft(null); setSelectedTaskId(task.id); }} onClose={() => setDraft(null)} onNotice={setNotice} /> : activeView !== 'settings' && activeView !== 'planning' && selectedTask ? <DetailPanel state={state} task={selectedTask} onState={setState} onClose={() => setSelectedTaskId(null)} onNotice={setNotice} onSelectTask={selectTask} /> : null}
         </>
       )}
       {notice ? <div className="toast" role="status"><Sparkles size={15} />{notice}<button aria-label="Dismiss" onClick={() => setNotice(null)}><X size={14} /></button></div> : null}
@@ -362,6 +364,7 @@ function Sidebar({ state, activeView, counts, onView, onSource, onSettings }: { 
       <p className="nav-label">Lists</p>
       <nav className="primary-nav" aria-label="Task lists">
         {listDefinitions.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-item ${activeView === id ? 'active' : ''}`} aria-label={label} title={label} onClick={() => onView(id)}><Icon size={17} /><span>{label}</span>{counts?.[id] ? <em>{counts[id]}</em> : null}</button>)}
+        <button className={`nav-item ${activeView === 'planning' ? 'active' : ''}`} aria-label="Planning" onClick={() => onView('planning')}><Calendar size={17} /><span>Planning</span></button>
       </nav>
       <div className="sidebar-divider" />
       <div className="source-heading"><p className="nav-label">Sources</p><button aria-label="Add source" title="Add source" onClick={() => onSettings('sources')}><Plus size={15} /></button></div>
@@ -378,13 +381,14 @@ function Sidebar({ state, activeView, counts, onView, onSource, onSettings }: { 
 }
 
 function TopBar({ activeView, state, sourceId, onSource, query, onQuery, showFilters, onToggleFilters, onRefresh, onCompact }: { activeView: ViewId; state: AppState; sourceId: string; onSource: (sourceId: string) => void; query: string; onQuery: (value: string) => void; showFilters: boolean; onToggleFilters: () => void; onRefresh: () => void; onCompact: () => void }) {
-  const currentLabel = activeView === 'settings' ? 'Settings' : listDefinitions.find((item) => item.id === activeView)?.label ?? 'Tasks';
+  const currentLabel = activeView === 'settings' ? 'Settings' : activeView === 'planning' ? 'Planning' : listDefinitions.find((item) => item.id === activeView)?.label ?? 'Tasks';
+  const taskView = activeView !== 'settings' && activeView !== 'planning';
   return <header className="topbar">
-    <div className="topbar-title"><div><h1>{currentLabel}</h1>{activeView !== 'settings' ? <span>{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date())}</span> : <span>Make Notion Tasks work for you</span>}</div>{activeView !== 'settings' ? <SyncStatus state={state} onRefresh={onRefresh} /> : null}</div>
+    <div className="topbar-title"><div><h1>{currentLabel}</h1>{activeView === 'planning' ? <span>Seven local dates from today</span> : activeView !== 'settings' ? <span>{new Intl.DateTimeFormat(undefined, { weekday: 'long', month: 'long', day: 'numeric' }).format(new Date())}</span> : <span>Make Notion Tasks work for you</span>}</div>{taskView ? <SyncStatus state={state} onRefresh={onRefresh} /> : null}</div>
     <div className="topbar-actions">
-      {activeView !== 'settings' ? <select className="topbar-source-select" aria-label="Filter by source" value={sourceId} onChange={(event) => onSource(event.target.value)}><option value="">All sources</option>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select> : null}
-      {activeView !== 'settings' ? <label className="search-field"><Search size={16} /><input aria-label="Search tasks" placeholder="Search tasks" value={query} onChange={(event) => onQuery(event.target.value)} /></label> : null}
-      {activeView !== 'settings' ? <button className={`icon-button ${showFilters ? 'active' : ''}`} aria-label="Filter tasks" title="Filter tasks" onClick={onToggleFilters}><Filter size={17} /></button> : null}
+      {taskView ? <select className="topbar-source-select" aria-label="Filter by source" value={sourceId} onChange={(event) => onSource(event.target.value)}><option value="">All sources</option>{state.sources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}</select> : null}
+      {taskView ? <label className="search-field"><Search size={16} /><input aria-label="Search tasks" placeholder="Search tasks" value={query} onChange={(event) => onQuery(event.target.value)} /></label> : null}
+      {taskView ? <button className={`icon-button ${showFilters ? 'active' : ''}`} aria-label="Filter tasks" title="Filter tasks" onClick={onToggleFilters}><Filter size={17} /></button> : null}
       <button className="icon-button" aria-label="Refresh tasks" title="Refresh tasks" onClick={onRefresh}><RefreshCw size={17} className={state.sync.syncing ? 'spin' : ''} /></button>
       <button className="icon-button" aria-label="Use compact view" title="Use compact view" onClick={onCompact}><PanelLeft size={17} /></button>
     </div>
@@ -518,7 +522,29 @@ function DraftPanel({ state, draft, onCreate, onCreated, onClose, onNotice }: { 
   </div></aside>;
 }
 
-function DetailPanel({ state, task, onState, onClose, onNotice }: { state: AppState; task: Task; onState: Dispatch<SetStateAction<AppState | null>>; onClose: () => void; onNotice: (message: string) => void }) {
+function PlanningView({ state, onState, onNotice, onSelectTask }: { state: AppState; onState: (state: AppState) => void; onNotice: (message: string) => void; onSelectTask: (task: Task) => void }) {
+  const planning = state.planning!;
+  const [proposal, setProposal] = useState<PlanProposal | null>(null);
+  const [timezoneDraft, setTimezoneDraft] = useState(planning.settings.timezone);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [eventTitle, setEventTitle] = useState(''); const [eventStart, setEventStart] = useState(''); const [eventEnd, setEventEnd] = useState('');
+  useEffect(()=>setTimezoneDraft(planning.settings.timezone),[planning.settings.timezone]);
+  async function updateSettings(patch: Parameters<typeof window.desktop.updatePlanningSettings>[0]) { try { onState(await window.desktop.updatePlanningSettings(patch)); setProposal(null); } catch(e) { onNotice(e instanceof Error ? e.message : 'Unable to save planning settings.'); } }
+  async function generate() { try { const next=await window.desktop.generatePlan();setProposal(next);setSelected([...next.items.map(x=>JSON.stringify([x.ref.provider,x.ref.sourceId,x.ref.taskId])),...next.removals.map(x=>`remove:${x.blockId}`),...next.moves.filter(x=>x.start).map(x=>`move:${x.blockId}`)]); } catch(e) { onNotice(e instanceof Error ? e.message : 'Unable to generate a plan.'); } }
+  async function importFile(file?: File) { if(!file)return; try { onState(await window.desktop.importCalendar(await file.text()));setProposal(null);onNotice('Calendar snapshot imported.'); } catch(e) { onNotice(e instanceof Error ? e.message : 'Calendar import failed. The previous snapshot is unchanged.'); } }
+  async function addEvent() { if(!eventTitle.trim()||!eventStart||!eventEnd)return; try { const start=DateTime.fromISO(eventStart,{zone:planning.settings.timezone}).toUTC(),end=DateTime.fromISO(eventEnd,{zone:planning.settings.timezone}).toUTC();if(!start.isValid||!end.isValid||end<=start)throw new Error('Choose a valid commitment time and end after its start.');onState(await window.desktop.addCalendarEvent({title:eventTitle,start:start.toISO()!,end:end.toISO()!}));setEventTitle('');setEventStart('');setEventEnd('');setProposal(null); } catch(e) { onNotice(e instanceof Error ? e.message : 'Unable to add commitment.'); } }
+  async function approve() { if(!proposal)return; try { onState(await window.desktop.approvePlan(proposal,selected));setProposal(null);onNotice('Selected task blocks were approved and saved locally.'); } catch(e) { onNotice(e instanceof Error ? e.message : 'Plan approval failed.'); } }
+  async function exportBlocks() { try { const content=await window.desktop.exportCalendar();const blob=new Blob([content],{type:'text/calendar'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='notion-tasks-plan.ics';a.click();URL.revokeObjectURL(a.href); } catch(e) { onNotice(e instanceof Error ? e.message : 'Unable to export blocks.'); } }
+  return <section className="planning-view">
+    <div className="planning-intro"><span className="eyebrow">Seven day plan</span><h2>Plan around your commitments</h2><p>Recommendations use estimates and a local calendar snapshot. Approving saves flexible blocks in this app; it does not sync them to Google, Outlook, Notion, or Plane.</p></div>
+    <div className="planning-card"><h3>Working hours</h3><div className="planning-controls"><label>Timezone<input aria-label="Planning timezone" value={timezoneDraft} onChange={e=>setTimezoneDraft(e.target.value)} onBlur={()=>{if(timezoneDraft!==planning.settings.timezone)void updateSettings({timezone:timezoneDraft})}} /></label><label>Start<input type="number" min="0" max="23" value={planning.settings.startHour} onChange={e=>void updateSettings({startHour:Number(e.target.value)})} /></label><label>End<input type="number" min="1" max="24" value={planning.settings.endHour} onChange={e=>void updateSettings({endHour:Number(e.target.value)})} /></label></div><div className="weekday-picker">{['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((name,i)=><label key={name}><input type="checkbox" checked={planning.settings.workdays.includes(i+1)} onChange={e=>void updateSettings({workdays:e.target.checked?[...planning.settings.workdays,i+1].sort() : planning.settings.workdays.filter(x=>x!==i+1)})} />{name}</label>)}</div></div>
+    <div className="planning-card"><h3>Calendar snapshot</h3><p>{planning.calendarImportedAt ? `${planning.calendarSource==='ics'?'Local ICS snapshot':'Manual commitments only'} · updated ${new Date(planning.calendarImportedAt).toLocaleString()} · ${planning.events.length} fixed events` : 'No snapshot imported yet.'} Import a complete snapshot covering the next seven dates. Recurrence and embedded custom timezone definitions are rejected with an explanation.</p><label className="button button-secondary calendar-import"><Download size={15}/>Import .ics snapshot<input aria-label="Import ICS calendar" type="file" accept=".ics,text/calendar" onChange={e=>void importFile(e.target.files?.[0])}/></label><label className="empty-calendar-choice"><input type="checkbox" checked={planning.settings.allowEmptyCalendar} onChange={e=>void updateSettings({allowEmptyCalendar:e.target.checked})}/>Plan with an explicitly empty calendar plus manual commitments</label>{planning.events.map(ev=><div className="planning-event" key={ev.id}><strong>{ev.title}</strong><span>{new Date(ev.start).toLocaleString(undefined,{timeZone:planning.settings.timezone})} – {new Date(ev.end).toLocaleTimeString(undefined,{timeZone:planning.settings.timezone})}</span></div>)}<div className="manual-event"><input placeholder="Add fixed commitment" aria-label="Commitment title" value={eventTitle} onChange={e=>setEventTitle(e.target.value)}/><input aria-label="Commitment starts (planning timezone)" type="datetime-local" value={eventStart} onChange={e=>setEventStart(e.target.value)}/><input aria-label="Commitment ends (planning timezone)" type="datetime-local" value={eventEnd} onChange={e=>setEventEnd(e.target.value)}/><button className="button button-secondary" onClick={()=>void addEvent()}>Add</button></div><small>Manual commitment times are interpreted in {planning.settings.timezone}.</small></div>
+    <div className="planning-card"><div className="planning-heading"><div><h3>Recommendations</h3><p>Only tasks with saved estimates are scheduled. Add estimates from a task’s details.</p></div><button className="button button-primary" onClick={()=>void generate()}>Generate plan</button></div>{proposal ? <><p className="planning-capacity">{proposal.allocatedMinutes} allocated · {proposal.capacityMinutes} capacity · {Math.max(0,proposal.capacityMinutes-proposal.allocatedMinutes)} unallocated minutes</p>{proposal.removals.map(item=>{const key=`remove:${item.blockId}`;const task=state.tasks.find(t=>t.id===item.ref.taskId&&t.sourceId===item.ref.sourceId);return <label className="proposal-row" key={item.blockId}><input type="checkbox" checked={selected.includes(key)} onChange={e=>setSelected(e.target.checked?[...selected,key]:selected.filter(x=>x!==key))}/><span><strong>Remove future block · {task?.name??'Unavailable task'}</strong><small>{item.reason}</small></span></label>})}{proposal.moves.map(item=>{const key=`move:${item.blockId}`;const task=state.tasks.find(t=>t.id===item.ref.taskId&&t.sourceId===item.ref.sourceId);return <label className="proposal-row" key={`move-${item.blockId}`}><input type="checkbox" disabled={!item.start} checked={selected.includes(key)} onChange={e=>setSelected(e.target.checked?[...selected,key]:selected.filter(x=>x!==key))}/><span><strong>Move approved block · {task?.name??'Unavailable task'}</strong><small>{item.start?`${new Date(item.start).toLocaleString(undefined,{timeZone:planning.settings.timezone})} · ${item.minutes} min · `:''}{item.reason}</small></span></label>})}{proposal.items.map((item,i)=>{const key=JSON.stringify([item.ref.provider,item.ref.sourceId,item.ref.taskId]);const task=state.tasks.find(t=>t.id===item.ref.taskId&&t.sourceId===item.ref.sourceId);return <label className="proposal-row" key={`${key}-${i}`}><input type="checkbox" checked={selected.includes(key)} onChange={e=>setSelected(e.target.checked?[...selected,key]:selected.filter(x=>x!==key))}/><span><strong>{task?.name||'Unavailable task'}</strong><small>{new Date(item.start).toLocaleString(undefined,{timeZone:planning.settings.timezone})} · {item.minutes} min · {item.reason}</small></span><button type="button" className="text-button" onClick={e=>{e.preventDefault();if(task)onSelectTask(task)}}>Task details</button></label>})}{proposal.unscheduled.map((item,i)=>{const task=state.tasks.find(t=>t.id===item.ref.taskId&&t.sourceId===item.ref.sourceId);return <div className="unscheduled-row" key={`${item.ref.taskId}-${i}`}><strong>{task?.name||'Unavailable task'}</strong><span>{item.minutes===null?'Unknown effort':`${item.minutes} min`} · {item.reason}</span>{task?<button className="text-button" onClick={()=>onSelectTask(task)}>Add estimate</button>:null}</div>})}<div className="planning-actions"><button className="button button-secondary" onClick={()=>setProposal(null)}>Dismiss draft</button><button className="button button-primary" disabled={!selected.length} onClick={()=>void approve()}>Approve selected</button></div></>:<div className="planning-empty">Generate a draft to see what fits into the next seven days.</div>}</div>
+    <div className="planning-card"><div className="planning-heading"><div><h3>Approved local blocks</h3><p>These blocks are flexible only inside this app. An ICS export is a copy; changes made in another calendar cannot be tracked or moved here.</p></div><button className="button button-secondary" disabled={!planning.blocks.length} onClick={()=>void exportBlocks()}>Export .ics</button></div>{planning.blocks.map(block=>{const task=state.tasks.find(t=>t.id===block.ref.taskId&&t.sourceId===block.ref.sourceId);return <div className="planning-event" key={block.id}><strong>{task?.name||'Unavailable task'}</strong><span>{new Date(block.start).toLocaleString()} – {new Date(block.end).toLocaleTimeString()} · Local</span></div>})}{!planning.blocks.length?<div className="planning-empty">No approved blocks yet.</div>:null}</div>
+  </section>;
+}
+
+function DetailPanel({ state, task, onState, onClose, onNotice, onSelectTask }: { state: AppState; task: Task; onState: Dispatch<SetStateAction<AppState | null>>; onClose: () => void; onNotice: (message: string) => void; onSelectTask: (task: Task) => void }) {
   const source = sourceForTask(task, state.sources);
   const provider = providerTaskOf(task, source);
   const dateOnly = provider === 'plane';
@@ -529,11 +555,38 @@ function DetailPanel({ state, task, onState, onClose, onNotice }: { state: AppSt
   const [status, setStatus] = useState(task.status);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState<Task | null>(null);
+  const taskRef: TaskRef = { provider, sourceId: task.sourceId, taskId: task.id };
+  const planRow = state.planning?.tasks.find(x => x.ref.provider === provider && x.ref.sourceId === task.sourceId && x.ref.taskId === task.id);
+  const breakdownChildren = state.planning?.tasks.filter(x => x.parent?.taskId === task.id && x.parent.sourceId === task.sourceId).sort((a,b)=>a.stepOrder-b.stepOrder) ?? [];
+  const knownTotal = breakdownChildren.reduce((n,x)=>n+(x.estimateMinutes??0),0);
+  const remainingKnown = breakdownChildren.reduce((n,x)=>{const child=state.tasks.find(t=>t.id===x.ref.taskId&&t.sourceId===x.ref.sourceId);const allocated=state.planning?.blocks.filter(b=>b.ref.taskId===x.ref.taskId&&b.ref.sourceId===x.ref.sourceId&&DateTime.fromISO(b.end)>DateTime.utc()).reduce((sum,b)=>sum+Math.max(0,Math.round(DateTime.fromISO(b.end).diff(DateTime.fromISO(b.start),'minutes').minutes)),0)??0;return n+(child?.completed?0:Math.max(0,(x.estimateMinutes??0)-allocated));},0);
+  const taskRemainingKnown = Math.max(0,(planRow?.estimateMinutes??0)-(state.planning?.blocks.filter(b=>b.ref.taskId===task.id&&b.ref.sourceId===task.sourceId&&DateTime.fromISO(b.end)>DateTime.utc()).reduce((sum,b)=>sum+Math.max(0,Math.round(DateTime.fromISO(b.end).diff(DateTime.fromISO(b.start),'minutes').minutes)),0)??0));
+  const unknownTotal = breakdownChildren.filter(x=>x.estimateMinutes===null).length;
+  const unavailableChildren = breakdownChildren.filter(x=>!state.tasks.some(t=>t.id===x.ref.taskId&&t.sourceId===x.ref.sourceId)).length;
+  const breakdownOperation = state.planning?.operations.find(o=>o.parent.taskId===task.id&&o.parent.sourceId===task.sourceId&&o.status!=='complete');
+  const [estimate, setEstimate] = useState(planRow?.estimateMinutes?.toString() ?? '');
+  const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [steps, setSteps] = useState([{ name: '', minutes: '20' }, { name: '', minutes: '40' }]);
+  const [creatingChildren, setCreatingChildren] = useState(false);
+  const [breakdownOperationId, setBreakdownOperationId] = useState<string | null>(null);
   const editable = state.sync.onlineSources.includes(task.sourceId);
   const options = sourceStatusOptions(source);
   const baselineDate = dateInputValue(baseline.due);
   const baselineTime = timeInputValue(baseline.due);
   const dirty = title !== baseline.name || status !== baseline.status || date !== baselineDate || time !== baselineTime;
+
+  useEffect(() => setEstimate(planRow?.estimateMinutes?.toString() ?? ''), [task.id, planRow?.estimateMinutes]);
+  async function saveEstimate(value: number | null) { try { onState(await window.desktop.setTaskEstimate(taskRef,value)); setEstimate(value?.toString() ?? ''); onNotice(value === null ? 'Estimate cleared.' : 'Estimate saved.'); } catch(e) { onNotice(e instanceof Error ? e.message : 'Unable to save estimate.'); } }
+  async function createBreakdown() {
+    const prepared=steps.map((s,i)=>({name:s.name.trim(),minutes:Number(s.minutes),order:i}));
+    if(prepared.some(s=>!s.name||!Number.isInteger(s.minutes)||s.minutes<=0)){onNotice('Give every step a name and a positive whole-minute estimate.');return;}
+    if(!editable){onNotice('Reconnect this source to create child tasks.');return;}
+    const opId=breakdownOperationId??globalThis.crypto.randomUUID();setBreakdownOperationId(opId);setCreatingChildren(true);
+    try { const next=await window.desktop.createBreakdown(opId,taskRef,prepared.map(({name,minutes,order})=>({name,estimateMinutes:minutes,order}))); onState(next);setBreakdownOperationId(null);setBreakdownOpen(false);onNotice('Child tasks created and linked locally.'); }
+    catch(e) { onNotice(e instanceof Error ? e.message : 'Breakdown stopped. Review the saved recovery state before trying again.'); }
+    finally { setCreatingChildren(false); }
+  }
+  async function resumeBreakdown() { if(!breakdownOperation)return;setCreatingChildren(true);try{const next=await window.desktop.createBreakdown(breakdownOperation.id,breakdownOperation.parent,breakdownOperation.steps.map(({name,estimateMinutes,order})=>({name,estimateMinutes,order})));onState(next);onNotice('Remaining child tasks were created and linked locally.');}catch(e){onNotice(e instanceof Error?e.message:'Unable to resume this breakdown.');}finally{setCreatingChildren(false);} }
 
   useEffect(() => {
     if (task.id !== baseline.id) {
@@ -611,6 +664,9 @@ function DetailPanel({ state, task, onState, onClose, onNotice }: { state: AppSt
     <label className="detail-title"><input value={title} onChange={(event) => setTitle(event.target.value)} disabled={!editable} aria-label="Task title" /></label>
      <div className="detail-property"><div className="property-icon"><Calendar size={16} /></div><div className="property-content"><span className="property-label">Due date</span><div className="date-edit-row"><input type="date" value={date} disabled={!editable} onChange={(event) => setDate(event.target.value)} /><input type="time" value={time} disabled={!editable || !date || dateOnly} aria-label="Due time" onChange={(event) => setTime(event.target.value)} /><button className="clear-date" disabled={!editable || !date} onClick={() => { setDate(''); setTime(''); }}>Clear</button></div><span className="property-hint">{dateOnly ? 'Plane date-only due date' : baseline.due?.end ? `Range ends ${displayDateTime({ start: baseline.due.end, end: null })}` : baseline.due?.time_zone ? `Timezone: ${baseline.due.time_zone}` : 'Local time'}</span></div></div>
     <div className="detail-property"><div className="property-icon"><Flag size={16} /></div><div className="property-content"><span className="property-label">Status</span>{options.length ? <select value={status} disabled={!editable} onChange={(event) => setStatus(event.target.value)}>{!options.some((option) => option.name === status) ? <option value={status}>{status || 'Current status'}</option> : null}{options.map((option) => <option key={option.id} value={option.name}>{option.name}</option>)}</select> : <input value={status} disabled={!editable} onChange={(event) => setStatus(event.target.value)} placeholder="No status" />}</div></div>
+    <div className="planning-estimate"><div><span className="property-label">{breakdownChildren.length?'Breakdown rollup':'Planning estimate'}</span><small>{breakdownChildren.length?'Containers use child task estimates for their rollup.':'Local metadata · maximum 100,000 minutes'}</small></div><div className="estimate-entry"><input aria-label="Task estimate in minutes" type="number" min="1" max="100000" step="1" placeholder="Unknown" value={estimate} disabled={breakdownChildren.length>0} onChange={e=>setEstimate(e.target.value)} /><button className="button button-secondary" disabled={breakdownChildren.length>0||estimate===(planRow?.estimateMinutes?.toString()??'')} onClick={()=>void saveEstimate(estimate===''?null:Number(estimate))}>Save</button></div>{!breakdownChildren.length&&planRow?.estimateMinutes!==null&&planRow?.estimateMinutes!==undefined?<small>{planRow.estimateMinutes} min total · {taskRemainingKnown} min remaining after future approved blocks</small>:null}<div className="estimate-presets">{[15,30,60,90,120].map(n=><button key={n} disabled={breakdownChildren.length>0} onClick={()=>void saveEstimate(n)}>{n}m</button>)}<button disabled={breakdownChildren.length>0} onClick={()=>void saveEstimate(null)}>Unknown</button></div>{planRow?.parent ? <p className="planning-link-note">Part of <button className="text-button" onClick={()=>{const parent=state.tasks.find(t=>t.id===planRow.parent!.taskId&&t.sourceId===planRow.parent!.sourceId);if(parent)onSelectTask(parent)}}>{state.tasks.find(t=>t.id===planRow.parent!.taskId&&t.sourceId===planRow.parent!.sourceId)?.name ?? 'unavailable parent'}</button> · local link</p> : null}{breakdownChildren.length ? <div className="planning-link-note"><span>Breakdown total: {knownTotal}{unknownTotal||unavailableChildren?' known minutes · incomplete':''} · remaining: {remainingKnown}{breakdownChildren.some(x=>x.estimateMinutes===null&&!state.tasks.find(t=>t.id===x.ref.taskId&&t.sourceId===x.ref.sourceId)?.completed)?' known minutes · incomplete':''}</span>{breakdownChildren.map(child=>{const linked=state.tasks.find(t=>t.id===child.ref.taskId&&t.sourceId===child.ref.sourceId);return linked?<button className="text-button" key={linked.id} onClick={()=>onSelectTask(linked)}>{linked.completed?'✓ ':''}{linked.name} · {child.estimateMinutes??'Unknown'} min</button>:null})}</div> : <button className="text-button" onClick={()=>setBreakdownOpen(v=>!v)}>{breakdownOpen?'Close breakdown':'Break it down into child tasks'}</button>}</div>
+    {breakdownOpen ? <div className="breakdown-editor"><strong>Breakdown steps</strong><p>These become real tasks in {providerLabel(provider)}. Relationships are saved locally in this app.</p>{steps.map((step,i)=><div className="breakdown-step" key={i}><input aria-label={`Step ${i+1} name`} placeholder={`Step ${i+1}`} value={step.name} onChange={e=>setSteps(rows=>rows.map((r,j)=>j===i?{...r,name:e.target.value}:r))}/><input aria-label={`Step ${i+1} estimate minutes`} type="number" min="1" step="1" value={step.minutes} onChange={e=>setSteps(rows=>rows.map((r,j)=>j===i?{...r,minutes:e.target.value}:r))}/><button className="icon-button" aria-label={`Remove step ${i+1}`} disabled={steps.length<2} onClick={()=>setSteps(rows=>rows.filter((_,j)=>j!==i))}><X size={14}/></button></div>)}<button className="text-button" onClick={()=>setSteps(rows=>[...rows,{name:'',minutes:'30'}])}>+ Add step</button><p>Total: {steps.reduce((n,x)=>n+(Number(x.minutes)||0),0)} minutes</p><button className="button button-primary" disabled={creatingChildren||!steps.every(x=>x.name.trim())} onClick={()=>void createBreakdown()}>{creatingChildren?'Creating tasks…':'Create subtasks'}</button></div>:null}
+    {breakdownOperation ? <div className="conflict-card"><strong>{breakdownOperation.status==='recovery-needed'||breakdownOperation.steps.some(s=>s.status==='creating'||s.status==='recovery-needed')?'Breakdown needs recovery':'Breakdown setup paused'}</strong><span>{breakdownOperation.status==='recovery-needed'||breakdownOperation.steps.some(s=>s.status==='creating'||s.status==='recovery-needed')?'A child creation result is uncertain. Refresh '+providerLabel(provider)+' and inspect the source before taking further action.':'Confirmed children are saved. Resume to create only steps still marked pending.'}</span>{breakdownOperation.steps.map(s=><small key={s.order}>{s.order+1}. {s.name} · {s.status}{s.ref?` · ${s.ref.taskId}`:''}</small>)}{breakdownOperation.status==='in-progress'&&breakdownOperation.steps.every(s=>s.status==='pending'||s.status==='created')?<button className="button button-secondary" disabled={creatingChildren||!editable} onClick={()=>void resumeBreakdown()}>{creatingChildren?'Resuming…':'Resume missing steps'}</button>:null}</div>:null}
     <div className="detail-property"><div className="property-icon">{provider === 'plane' ? <Layers size={16} /> : <Database size={16} />}</div><div className="property-content"><span className="property-label">Source</span><span className="property-value">{source?.name ?? 'Source unavailable'}</span><span className="property-hint">{editable ? `Online · changes sync to ${providerLabel(provider)}` : 'Offline · read-only until the source reconnects'}</span></div></div>
     {source?.mapping.owner ? <div className="detail-property"><div className="property-icon"><ShieldCheck size={16} /></div><div className="property-content"><span className="property-label">Owner</span><span className="property-value">{task.owners?.map((owner) => owner.name).join(', ') || 'Unassigned'}</span></div></div> : null}
     <div className="detail-footer"><button className="button button-secondary open-notion" onClick={() => apiAvailable() && void window.desktop.openNotion(task.id)}><ExternalLink size={15} /> Open in {providerLabel(provider)}</button>{editable ? <button className="button button-primary" disabled={!dirty || saving || Boolean(conflict)} onClick={() => void save()}>{saving ? <LoaderCircle size={15} className="spin" /> : null}{saving ? 'Saving…' : 'Save changes'}</button> : <span className="offline-note"><CloudOff size={14} /> Reconnect to edit</span>}</div>

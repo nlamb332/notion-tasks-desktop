@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { safeStorage } from "electron";
 import { cleanTaskOwners } from "../shared/types";
 import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type SourceProvider, type Task, type ThemePreference } from "../shared/types";
+import { cleanPlanning, DEFAULT_PLANNING } from "./planning";
 
 export interface PersistedData {
   sources: SourceConfig[];
@@ -10,6 +11,7 @@ export interface PersistedData {
   stars: string[];
   settings: DesktopSettings;
   lastSync: string | null;
+  planning: import("../shared/types").PlanningData;
 }
 
 export const DEFAULT_SETTINGS: DesktopSettings = {
@@ -131,7 +133,7 @@ function cleanTasks(value: unknown): Task[] {
 }
 
 export function defaultPersistedData(): PersistedData {
-  return { sources: [], tasks: [], stars: [], settings: { ...DEFAULT_SETTINGS }, lastSync: null };
+  return { sources: [], tasks: [], stars: [], settings: { ...DEFAULT_SETTINGS }, lastSync: null, planning: cleanPlanning(DEFAULT_PLANNING) };
 }
 
 export class AppPersistence {
@@ -157,6 +159,7 @@ export class AppPersistence {
         stars: Array.isArray(raw.stars) ? raw.stars.filter((id): id is string => typeof id === "string") : [],
         settings: cleanSettings(raw.settings),
         lastSync: raw.lastSync === null || typeof raw.lastSync === "string" ? raw.lastSync as string | null : null,
+        planning: cleanPlanning(raw.planning),
       };
     } catch {
       return defaultPersistedData();
@@ -173,6 +176,7 @@ export class AppPersistence {
       lastSync: "sync" in data
         ? isRecord(data.sync) && (data.sync.lastSync === null || typeof data.sync.lastSync === "string") ? data.sync.lastSync as string | null : null
         : data.lastSync,
+      planning: cleanPlanning("planning" in data ? data.planning : undefined),
     };
     const temporaryPath = `${this.statePath}.${process.pid}.tmp`;
     fs.writeFileSync(temporaryPath, JSON.stringify(persisted), { encoding: "utf8", mode: 0o600 });
