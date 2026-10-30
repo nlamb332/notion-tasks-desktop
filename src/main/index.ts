@@ -492,7 +492,7 @@ export class DesktopRuntime {
       if(operation.steps[i].status==="created")continue;
       const currentSource=this.state.sources.find(s=>s.id===parent.sourceId);if(!currentSource)throw new Error("Breakdown source is no longer available.");this.requireOnline(currentSource);
       operation={...operation,status:"in-progress",updatedAt:new Date().toISOString(),steps:operation.steps.map((s,j)=>j===i?{...s,status:"creating",message:undefined}:s)};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();
-      try { const before=new Set(this.state.tasks.map(t=>`${t.sourceId}\0${t.id}`)); const next=await this.createTask({sourceId:parent.sourceId,name:steps[i].name}); const created=next.tasks.find(t=>t.sourceId===parent.sourceId&&!before.has(`${t.sourceId}\0${t.id}`)); if(!created)throw new Error("The provider response did not include the created task ID."); const ref:TaskRef={provider:parent.provider,sourceId:parent.sourceId,taskId:created.id};operation={...operation,steps:operation.steps.map((s,j)=>j===i?{...s,status:"created",ref,message:undefined}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.state.planning=linkChildren(this.planning(),parent,[{ref,estimateMinutes:steps[i].estimateMinutes,order:steps[i].order}]);this.persist();this.broadcast();
+      try { const result=await this.createTaskWithResult({sourceId:parent.sourceId,name:steps[i].name});const ref:TaskRef={provider:parent.provider,sourceId:parent.sourceId,taskId:result.task.id};operation={...operation,steps:operation.steps.map((s,j)=>j===i?{...s,status:"created",ref,message:undefined}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.state.planning=linkChildren(this.planning(),parent,[{ref,estimateMinutes:steps[i].estimateMinutes,order:steps[i].order}]);this.persist();this.broadcast();
       } catch(error) { const message=toError(error).message;const knownRejected=error instanceof TaskCreateFailure&&error.outcome==="not-created";operation={...operation,status:knownRejected?"in-progress":"recovery-needed",steps:operation.steps.map((s,j)=>j===i?{...s,status:knownRejected?"failed":"recovery-needed",message}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();this.broadcast();throw new Error(knownRejected?`Could not create “${steps[i].name}”: ${message}. This step is confirmed not created; correct the issue and resume.`:`The result for “${steps[i].name}” is uncertain: ${message}. Refresh the source and reconcile this step before resuming.`); }
     }
     operation={...operation,status:"complete",updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();this.broadcast();return this.snapshot();
@@ -951,6 +951,10 @@ export class DesktopRuntime {
   }
 
   private async createTask(value: unknown): Promise<AppState> {
+    return (await this.createTaskWithResult(value)).state;
+  }
+
+  private async createTaskWithResult(value: unknown): Promise<{ state: AppState; task: Task }> {
     if (!isRecord(value)) throw new TypeError("createTask input is invalid");
     const sourceId = stringValue(value.sourceId, "sourceId");
     const name = stringValue(value.name, "name");
@@ -976,7 +980,7 @@ export class DesktopRuntime {
     this.state.sources = this.state.sources.map((item) => item.id === sourceId ? refreshed : item);
     this.persist();
     this.broadcast();
-    return this.snapshot();
+    return { state: this.snapshot(), task };
     });
   }
 

@@ -5,7 +5,7 @@ The desktop shell, Notion and Plane adapters, and renderer are checked by automa
 ## Verified
 
 - `npm run typecheck`: passes.
-- `npm test`: 80 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, desktop synchronization contracts, rolling-calendar scheduling, ICS validation, local approval, and backward-compatible planning persistence.
+- `npm test`: 93 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, desktop synchronization contracts, rolling-calendar scheduling, ICS validation, local approval, and backward-compatible planning persistence.
 - `npm run build`: production renderer and Electron bundles build successfully.
 - `npm run test:desktop`: shell, mocked Notion integration (including breakdown recovery), Plane integration, and updater suites pass in real Electron using isolated workspace-local user-data directories and synthetic API responses.
 - `node scripts/smoke.mjs --dev`: the Vite development renderer and Electron bridge pass the same shell smoke checks. Production retains its strict content policy; the development URL is limited to unpackaged loopback HTTP.
@@ -13,7 +13,7 @@ The desktop shell, Notion and Plane adapters, and renderer are checked by automa
 
 Rolling-calendar unit coverage verifies a task placed into a gap between fixed events, leaf-only scheduling and estimate rollups, completed-child remaining effort, stale-plan rejection and idempotent approval, fixed-event conflict moves that remain uncommitted until approval, breakdown prerequisite blocking and recovery journal persistence, spring DST working-hour capacity, manual-calendar completeness gating, recurrence rejection, transparent/cancelled events, malformed event intervals, and persistence migration from pre-planning state. The mocked Electron integration covers partial breakdown success, safe retry after a rejected write, ambiguous writes, duplicate-child rejection, explicit reconciliation, and recovery after a full process restart. `npm run typecheck`, `npm test`, `npm run build`, and `npm run test:desktop` pass.
 
-The Notion integration smoke uses synthetic provider responses only. Its breakdown cases cover persisted incremental child links and estimates, a rejected create followed by safe resume, an ambiguous create resolved to the exact refreshed task identity, duplicate-link rejection, and reconciliation after restarting Electron. No real task data was changed.
+The Notion integration smoke uses synthetic provider responses only. Its breakdown cases cover persisted incremental child links and estimates, a rejected create followed by safe resume, an ambiguous create resolved to the exact refreshed task identity, duplicate-link rejection, exact task identity under concurrent creation, and reconciliation after restarting Electron. No real task data was changed.
 
 The desktop integration suite exercises synthetic Notion URL fixtures, multiple sources, deduplication, page identity, create through IPC and the visible UI, edit, native status completion/reopening, conflict handling, preservation of unmapped Status 1, partial-source failures, cached task retention, offline write blocking, local stars, encrypted credential storage, credential deletion on disconnect, and last-successful-sync persistence. Tests do not modify real Notion content.
 

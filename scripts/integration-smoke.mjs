@@ -15,7 +15,7 @@ try {
    const ids=['33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444'];
    const names=['Tasks','Work Tasks'];
    const g=globalThis;
-   g.__fixture={offline:[],writes:[],pages:{},next:1,createRequests:0,failCreateNumber:0,failCreateMode:null};
+   g.__fixture={offline:[],writes:[],pages:{},next:1,createRequests:0,failCreateNumber:0,failCreateMode:null,pauseCreateName:null,pendingCreateName:null};
    const f=g.__fixture;
    const schema=i=>({id:ids[i],parent:{database_id:dbs[i]},title:[{plain_text:names[i]}],properties:{
      [i?'Name':'Task']:{id:'title',name:i?'Name':'Task',type:'title',title:{}},
@@ -46,7 +46,7 @@ try {
       const body=JSON.parse(init.body);const i=ids.indexOf(body.parent.data_source_id);const id=`cccccccc-cccc-cccc-cccc-${String(f.next++).padStart(12,'0')}`;
       const next=make(id,i,'');f.pages[id]=next;
       const fields=body.properties;for(const [key,val]of Object.entries(fields)){if(key==='title')next.properties.title.title=val.title.map(x=>({plain_text:x.text.content}));else if(key==='due')next.properties.due.date=val.date;else if(key==='status'){const s=schema(i).properties.Status.status.options.find(x=>x.id===val.status.id);next.properties.status.status=s;}}
-      f.writes.push({method,body});return failure==='ambiguous'?reply({message:'mocked gateway timeout after create'},500):reply({id});
+      f.writes.push({method,body});const createdName=body.properties.title.title.map(x=>x.text.content).join('');if(createdName===f.pauseCreateName){f.pendingCreateName=createdName;await new Promise(resolve=>{f.releaseCreate=resolve;});f.pendingCreateName=null;}return failure==='ambiguous'?reply({message:'mocked gateway timeout after create'},500):reply({id});
     }
     if(p.startsWith('/pages/')){
       const id=p.split('/').at(-1),row=f.pages[id];if(!row)return reply({message:'not found'},404);
@@ -195,6 +195,16 @@ try {
  const fixture=await app.evaluate(()=>globalThis.__fixture);
  assert.equal(fixture.pages[school.id].properties.unmapped.select.name,'Blocked');
  assert.ok(fixture.writes.every(w=>Object.keys(w.body.properties).every(k=>['title','due','status'].includes(k))));
+ const concurrentId='breakdown-concurrent-identity-fixture';const concurrentSteps=[{name:'Delayed breakdown child',estimateMinutes:30,order:0}];
+ await app.evaluate(()=>{globalThis.__fixture.pauseCreateName='Delayed breakdown child';});
+ const pendingBreakdown=page.evaluate(({id,parent,steps})=>window.desktop.createBreakdown(id,parent,steps),{id:concurrentId,parent:breakdownParent,steps:concurrentSteps});
+ await expect.poll(()=>app.evaluate(()=>globalThis.__fixture.pendingCreateName)).toBe('Delayed breakdown child');
+ const unrelatedCreated=await page.evaluate(sourceId=>window.desktop.createTask(sourceId,'Concurrent unrelated task'),sources[0].id);
+ const unrelated=unrelatedCreated.tasks.find(t=>t.name==='Concurrent unrelated task');assert.ok(unrelated);
+ await app.evaluate(()=>{const f=globalThis.__fixture;f.releaseCreate?.();f.pauseCreateName=null;});
+ const concurrentState=await pendingBreakdown;const concurrentOperation=concurrentState.planning.operations.find(o=>o.id===concurrentId);
+ const linkedConcurrentChild=concurrentState.tasks.find(t=>t.id===concurrentOperation.steps[0].ref.taskId&&t.sourceId===sources[0].id);
+ assert.equal(linkedConcurrentChild.name,'Delayed breakdown child');assert.notEqual(linkedConcurrentChild.id,unrelated.id);
  const persisted=await readFile(path.join(data,'state.json'),'utf8');
  assert.ok(!persisted.includes('fixture-token-only'));
  const encrypted=await readFile(path.join(data,'notion-token.enc'));
@@ -217,5 +227,5 @@ try {
  assert.equal(restartedState.planning.operations.find(o=>o.id===restartId).status,'complete');
  assert.equal(restartedState.planning.tasks.find(x=>x.ref.taskId===restartChild.id).estimateMinutes,35);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({result:'PASS',checks:['synthetic database URLs','two sources','duplicate source','persisted source tag color','explicit appearance preference','edit correct source','complete and reopen','conflict','create','partial breakdown links and estimates','known failure and safe resume','ambiguous outcome and explicit reconciliation','restart recovery','duplicate child prevention','offline writes blocked','offline local star','Status 1 untouched','renderer list and detail','encrypted credential storage','disconnect deletes credential','last successful sync persisted'],writes:fixture.writes.length,data,screenshots:['.cache/tasks.png','.cache/details.png','.cache/compact.png']},null,2));
+ console.log(JSON.stringify({result:'PASS',checks:['synthetic database URLs','two sources','duplicate source','persisted source tag color','explicit appearance preference','edit correct source','complete and reopen','conflict','create','partial breakdown links and estimates','known failure and safe resume','ambiguous outcome and explicit reconciliation','restart recovery','duplicate child prevention','concurrent task creation keeps exact provider identity','offline writes blocked','offline local star','Status 1 untouched','renderer list and detail','encrypted credential storage','disconnect deletes credential','last successful sync persisted'],writes:fixture.writes.length,data,screenshots:['.cache/tasks.png','.cache/details.png','.cache/compact.png']},null,2));
 }finally{await app.close();}
