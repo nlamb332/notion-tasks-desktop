@@ -8,6 +8,7 @@ import type {
   TaskDate,
   UpdateResult,
 } from "../shared/types";
+import { TaskCreateFailure } from "./task-create-failure";
 
 const DEFAULT_API = "https://api.plane.so/api/v1";
 const DEFAULT_WEB = "https://app.plane.so";
@@ -263,10 +264,17 @@ export class PlaneService {
     const config = await this.schema(source, parts);
     const body: JsonRecord = { name: name.trim(), state: config.mapping.reopen };
     if (config.mapping.due !== null && due?.start) body.target_date = due.start.slice(0, 10);
-    const created = await this.request<JsonRecord>(this.path(parts, "/work-items/"), { method: "POST", body: JSON.stringify(body) });
+    let created: JsonRecord;
+    try { created = await this.request<JsonRecord>(this.path(parts, "/work-items/"), { method: "POST", body: JSON.stringify(body) }); }
+    catch (error) {
+      const rejected = error instanceof PlaneHttpError && error.status >= 400 && error.status < 500;
+      throw new TaskCreateFailure(error instanceof Error ? error.message : String(error), rejected ? "not-created" : "unknown", { cause: error });
+    }
     const remoteId = text(created.id);
-    if (!remoteId) throw new Error("Plane did not return the created work item ID.");
-    const item = await this.request<JsonRecord>(this.path(parts, `/work-items/${encodeURIComponent(remoteId)}/`));
+    if (!remoteId) throw new TaskCreateFailure("Plane did not return the created work item ID.", "unknown");
+    let item: JsonRecord;
+    try { item = await this.request<JsonRecord>(this.path(parts, `/work-items/${encodeURIComponent(remoteId)}/`)); }
+    catch (error) { throw new TaskCreateFailure("Plane accepted the create request, but the new work item could not be read back.", "unknown", { cause: error }); }
     return this.taskFromResponse(item, source, config.mapping, parts);
   }
 

@@ -15,6 +15,7 @@ import { DateTime } from "luxon";
 import type { IpcMainInvokeEvent } from "electron";
 import { NotionService } from "./notion";
 import { PlaneService } from "./plane";
+import { TaskCreateFailure } from "./task-create-failure";
 import { UpdateController } from "./updates";
 import { approvePlan, DEFAULT_PLANNING, exportApprovedICS, generatePlan, linkChildren, parseCalendarICS, providerFor, refKey, setEstimate } from "./planning";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
@@ -22,6 +23,7 @@ import {
   SOURCE_COLORS,
   cleanTaskOwners,
   type AppState,
+  type BreakdownOperation,
   type ConnectionConfig,
   type DesktopSettings,
   type PlaneConnectionInput,
@@ -438,6 +440,7 @@ export class DesktopRuntime {
     ipcMain.handle("desktop:planning-estimate", guarded((ref, minutes) => this.setPlanningEstimate(ref, minutes)));
     ipcMain.handle("desktop:planning-links", guarded((parent, children) => this.setPlanningLinks(parent, children)));
     ipcMain.handle("desktop:planning-create-breakdown", guarded((id, parent, steps) => this.createPlanningBreakdown(id, parent, steps)));
+    ipcMain.handle("desktop:planning-reconcile-breakdown", guarded((id, order, resolution) => this.reconcilePlanningBreakdown(id, order, resolution)));
     ipcMain.handle("desktop:planning-settings", guarded((settings) => this.setPlanningSettings(settings)));
     ipcMain.handle("desktop:calendar-import", guarded((ics) => this.importCalendar(ics)));
     ipcMain.handle("desktop:calendar-add-event", guarded((event) => this.addCalendarEvent(event)));
@@ -482,16 +485,30 @@ export class DesktopRuntime {
     let data=this.planning();let operation=data.operations.find(x=>x.id===id);
     if(!operation){operation={id,parent,steps,status:"in-progress",updatedAt:new Date().toISOString()};data={...data,operations:[...data.operations,operation]};this.state.planning=data;this.persist();}
     else if(refKey(operation.parent)!==refKey(parent))throw new Error("Operation ID belongs to a different breakdown.");
-    if(operation.status==="complete")return this.snapshot();if(operation.status==="recovery-needed"||operation.steps.some(s=>s.status==="recovery-needed"||s.status==="creating"))throw new Error("A child creation result is uncertain. Refresh the source and reconcile this breakdown before retrying; no duplicate was created.");
+    if(operation.status==="complete")return this.snapshot();if(operation.status==="recovery-needed"||operation.steps.some(s=>s.status==="recovery-needed"||s.status==="creating"))throw new Error("A child creation result is uncertain. Refresh the source, then choose the existing task or confirm no task was created before resuming.");
     if(operation.steps.length!==steps.length||operation.steps.some((s,i)=>s.name!==steps[i].name||s.estimateMinutes!==steps[i].estimateMinutes||s.order!==steps[i].order))throw new Error("Operation ID was reused with different breakdown steps.");
     const parentSource=this.state.sources.find(s=>s.id===parent.sourceId);if(!parentSource)throw new Error("Breakdown source is no longer available.");this.requireOnline(parentSource);
     for(let i=0;i<operation.steps.length;i++){
       if(operation.steps[i].status==="created")continue;
-      operation={...operation,status:"in-progress",updatedAt:new Date().toISOString(),steps:operation.steps.map((s,j)=>j===i?{...s,status:"creating"}:s)};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();
-      try { const before=new Set(this.state.tasks.map(t=>`${t.sourceId}\0${t.id}`)); const next=await this.createTask({sourceId:parent.sourceId,name:steps[i].name}); const created=next.tasks.find(t=>t.sourceId===parent.sourceId&&!before.has(`${t.sourceId}\0${t.id}`)); if(!created)throw new Error("Created child could not be reconciled to a task ID."); const ref:TaskRef={provider:parent.provider,sourceId:parent.sourceId,taskId:created.id};operation={...operation,steps:operation.steps.map((s,j)=>j===i?{...s,status:"created",ref}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();
-      } catch(error) { operation={...operation,status:"recovery-needed",steps:operation.steps.map((s,j)=>j===i?{...s,status:"recovery-needed"}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();this.broadcast();throw error; }
+      const currentSource=this.state.sources.find(s=>s.id===parent.sourceId);if(!currentSource)throw new Error("Breakdown source is no longer available.");this.requireOnline(currentSource);
+      operation={...operation,status:"in-progress",updatedAt:new Date().toISOString(),steps:operation.steps.map((s,j)=>j===i?{...s,status:"creating",message:undefined}:s)};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();
+      try { const result=await this.createTaskWithResult({sourceId:parent.sourceId,name:steps[i].name});const ref:TaskRef={provider:parent.provider,sourceId:parent.sourceId,taskId:result.task.id};operation={...operation,steps:operation.steps.map((s,j)=>j===i?{...s,status:"created",ref,message:undefined}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.state.planning=linkChildren(this.planning(),parent,[{ref,estimateMinutes:steps[i].estimateMinutes,order:steps[i].order}]);this.persist();this.broadcast();
+      } catch(error) { const message=toError(error).message;const knownRejected=error instanceof TaskCreateFailure&&error.outcome==="not-created";operation={...operation,status:knownRejected?"in-progress":"recovery-needed",steps:operation.steps.map((s,j)=>j===i?{...s,status:knownRejected?"failed":"recovery-needed",message}:s),updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();this.broadcast();throw new Error(knownRejected?`Could not create “${steps[i].name}”: ${message}. This step is confirmed not created; correct the issue and resume.`:`The result for “${steps[i].name}” is uncertain: ${message}. Refresh the source and reconcile this step before resuming.`); }
     }
-    const children=operation.steps.map(s=>({ref:s.ref!,estimateMinutes:s.estimateMinutes,order:s.order}));this.state.planning=linkChildren(this.planning(),parent,children);operation={...operation,status:"complete",updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();this.broadcast();return this.snapshot();
+    operation={...operation,status:"complete",updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?operation!:o)};this.persist();this.broadcast();return this.snapshot();
+  }
+  private reconcilePlanningBreakdown(idValue: unknown, orderValue: unknown, resolutionValue: unknown): AppState {
+    const id=stringValue(idValue,"operationId");if(!Number.isInteger(orderValue)||!isRecord(resolutionValue))throw new TypeError("Breakdown recovery choice is invalid.");
+    const operation=this.planning().operations.find(o=>o.id===id);if(!operation)throw new Error("Breakdown operation was not found.");const order=orderValue as number;const step=operation.steps.find(s=>s.order===order);if(!step||!(step.status==="recovery-needed"||step.status==="creating"))throw new Error("This step does not need recovery.");
+    let nextStep:typeof step;
+    if(resolutionValue.kind==="confirm-not-created")nextStep={...step,status:"pending",message:undefined,ref:undefined};
+    else if(resolutionValue.kind==="existing-task"){
+      const ref=this.requireTaskRef(resolutionValue.ref);if(ref.sourceId!==operation.parent.sourceId||ref.provider!==operation.parent.provider)throw new Error("Choose an existing task from the same source as the breakdown.");
+      if(operation.steps.some(s=>s.order!==order&&s.ref&&refKey(s.ref)===refKey(ref)))throw new Error("That task is already assigned to another step in this breakdown.");
+      if(this.planning().tasks.some(row=>refKey(row.ref)===refKey(ref)&&row.parent)||this.planning().operations.some(other=>other.steps.some(s=>s.ref&&refKey(s.ref)===refKey(ref))))throw new Error("That task is already linked to another breakdown step.");
+      this.state.planning=linkChildren(this.planning(),operation.parent,[{ref,estimateMinutes:step.estimateMinutes,order:step.order}]);nextStep={...step,status:"created",ref,message:undefined};
+    } else throw new TypeError("Choose an existing task or confirm that no task was created.");
+    const steps=operation.steps.map(s=>s.order===order?nextStep:s);const unresolved=steps.some(s=>s.status==="recovery-needed"||s.status==="creating");const complete=steps.every(s=>s.status==="created");const status:BreakdownOperation["status"]=complete?"complete":unresolved?"recovery-needed":"in-progress";const updated={...operation,steps,status,updatedAt:new Date().toISOString()};this.state.planning={...this.planning(),operations:this.planning().operations.map(o=>o.id===id?updated:o)};this.persist();this.broadcast();return this.snapshot();
   }
   private setPlanningSettings(value: unknown): AppState {
     if(!isRecord(value))throw new TypeError("Planning settings are invalid"); const old=this.planning(); const settings={...old.settings,...value} as PlanningSettings;
@@ -934,6 +951,10 @@ export class DesktopRuntime {
   }
 
   private async createTask(value: unknown): Promise<AppState> {
+    return (await this.createTaskWithResult(value)).state;
+  }
+
+  private async createTaskWithResult(value: unknown): Promise<{ state: AppState; task: Task }> {
     if (!isRecord(value)) throw new TypeError("createTask input is invalid");
     const sourceId = stringValue(value.sourceId, "sourceId");
     const name = stringValue(value.name, "name");
@@ -959,7 +980,7 @@ export class DesktopRuntime {
     this.state.sources = this.state.sources.map((item) => item.id === sourceId ? refreshed : item);
     this.persist();
     this.broadcast();
-    return this.snapshot();
+    return { state: this.snapshot(), task };
     });
   }
 

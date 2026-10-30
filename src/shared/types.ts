@@ -23,7 +23,8 @@ export interface CalendarEvent { id: string; title: string; start: string; end: 
 export interface OwnedBlock { id: string; ref: TaskRef; start: string; end: string; approvedAt: string }
 export interface PlanningSettings { timezone: string; workdays: number[]; startHour: number; endHour: number; allowEmptyCalendar: boolean }
 export interface BreakdownStep { name: string; estimateMinutes: number; order: number }
-export interface BreakdownOperation { id: string; parent: TaskRef; steps: (BreakdownStep & { status: 'pending' | 'creating' | 'created' | 'recovery-needed'; ref?: TaskRef })[]; status: 'in-progress' | 'complete' | 'recovery-needed'; updatedAt: string }
+export type BreakdownStepStatus = 'pending' | 'creating' | 'created' | 'failed' | 'recovery-needed';
+export interface BreakdownOperation { id: string; parent: TaskRef; steps: (BreakdownStep & { status: BreakdownStepStatus; ref?: TaskRef; message?: string })[]; status: 'in-progress' | 'complete' | 'recovery-needed'; updatedAt: string }
 export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[] }
 export interface PlanProposal { id: string; inputRevision: number; generatedAt: string; expiresAt: string; items: { ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; moves: { blockId: string; ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; removals: { blockId: string; ref: TaskRef; reason: string }[]; unscheduled: { ref: TaskRef; reason: string; minutes: number | null }[]; capacityMinutes: number; allocatedMinutes: number }
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
@@ -64,6 +65,7 @@ export interface DesktopAPI {
   setTaskEstimate(ref: TaskRef, minutes: number | null): Promise<AppState>;
   linkBreakdown(parent: TaskRef, children: { ref: TaskRef; estimateMinutes: number; order: number }[]): Promise<AppState>;
   createBreakdown(operationId: string, parent: TaskRef, steps: BreakdownStep[]): Promise<AppState>;
+  reconcileBreakdownStep(operationId: string, order: number, resolution: { kind: 'existing-task'; ref: TaskRef } | { kind: 'confirm-not-created' }): Promise<AppState>;
   updatePlanningSettings(settings: Partial<PlanningSettings>): Promise<AppState>;
   importCalendar(ics: string): Promise<AppState>;
   addCalendarEvent(event: Omit<CalendarEvent, 'id'>): Promise<AppState>;
