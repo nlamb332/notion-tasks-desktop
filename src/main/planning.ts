@@ -13,6 +13,13 @@ export function refKey(ref: TaskRef): string { return JSON.stringify([ref.provid
 export function providerFor(sourceId: string, state: AppState): SourceProvider { return state.sources.find(s => s.id === sourceId)?.provider === "plane" ? "plane" : "notion"; }
 function taskRef(task: Task, state: AppState): TaskRef { return { provider: providerFor(task.sourceId, state), sourceId: task.sourceId, taskId: task.id }; }
 function mins(start: string, end: string): number { return Math.max(0, Math.round(DateTime.fromISO(end).diff(DateTime.fromISO(start), "minutes").minutes)); }
+function conflictSeverity(blocks: OwnedBlock[], events: CalendarEvent[], now: DateTime): Map<string, number> {
+  const active=blocks.filter(b=>DateTime.fromISO(b.end).toUTC()>now.toUTC());const conflicts=new Map<string,number>();
+  const overlap=(a:OwnedBlock,b:OwnedBlock)=>Interval.fromDateTimes(DateTime.fromISO(a.start).toUTC(),DateTime.fromISO(a.end).toUTC()).intersection(Interval.fromDateTimes(DateTime.fromISO(b.start).toUTC(),DateTime.fromISO(b.end).toUTC()));
+  for(let i=0;i<active.length;i++)for(let j=i+1;j<active.length;j++){const intersection=overlap(active[i],active[j]);if(intersection)conflicts.set(`blocks:${[active[i].id,active[j].id].sort().join(":")}`,intersection.length("milliseconds"));}
+  for(const block of active)for(const event of events){const start=DateTime.fromISO(block.start).toUTC(),end=DateTime.fromISO(block.end).toUTC(),eventStart=DateTime.fromISO(event.start).toUTC(),eventEnd=DateTime.fromISO(event.end).toUTC();const isOwnCopy=event.id===`${block.id}@notion-tasks.local`&&eventStart.toMillis()===start.toMillis()&&eventEnd.toMillis()===end.toMillis();if(isOwnCopy)continue;const intersection=Interval.fromDateTimes(start,end).intersection(Interval.fromDateTimes(eventStart,eventEnd));if(intersection)conflicts.set(`event:${block.id}:${event.id}`,intersection.length("milliseconds"));}
+  return conflicts;
+}
 function validZone(zone: string): boolean { return DateTime.now().setZone(zone).isValid; }
 function taskDeadline(task: Task | undefined, timezone: string): DateTime | null {
   const raw=task?.due?.end??task?.due?.start;if(!raw)return null;
@@ -124,17 +131,21 @@ export function approvePlan(data: PlanningData, state: AppState, proposal: PlanP
   const removed=new Set([...requestedRemovals.map(x=>x.blockId),...requestedMoves.map(x=>x.blockId)]);
   const moved:OwnedBlock[]=requestedMoves.map(m=>({id:m.blockId,ref:m.ref,start:m.start,end:m.end,approvedAt:new Date().toISOString()}));
   const blocks=[...data.blocks.filter(b=>!removed.has(b.id)),...moved,...additions.filter(x=>!data.blocks.some(b=>b.id===x.id))];
-  const active=blocks.filter(b=>DateTime.fromISO(b.end).toUTC()>approvalNow.toUTC());
-  for(let i=0;i<active.length;i++)for(let j=i+1;j<active.length;j++)if(Interval.fromDateTimes(DateTime.fromISO(active[i].start).toUTC(),DateTime.fromISO(active[i].end).toUTC()).overlaps(Interval.fromDateTimes(DateTime.fromISO(active[j].start).toUTC(),DateTime.fromISO(active[j].end).toUTC())))throw new Error("These selected changes overlap retained approved work. Select its proposed move or removal, then review again.");
-  for(const block of active)for(const event of data.events)if(Interval.fromDateTimes(DateTime.fromISO(block.start).toUTC(),DateTime.fromISO(block.end).toUTC()).overlaps(Interval.fromDateTimes(DateTime.fromISO(event.start).toUTC(),DateTime.fromISO(event.end).toUTC())))throw new Error("These selected changes overlap a fixed calendar event. Select the proposed move or removal, then review again.");
-  for(const item of requested){
-    const row=data.tasks.find(x=>refKey(x.ref)===refKey(item.ref)); if(!row?.parent)continue;
-    const predecessors=data.tasks.filter(x=>x.parent&&refKey(x.parent)===refKey(row.parent!)&&x.stepOrder<row.stepOrder);
-    for(const prior of predecessors){const priorTask=state.tasks.find(t=>t.id===prior.ref.taskId&&t.sourceId===prior.ref.sourceId);if(priorTask?.completed)continue;
-      if(prior.estimateMinutes===null)throw new Error("A selected successor still has an unknown prerequisite. Approve or complete every earlier step first.");
-      const covered=blocks.filter(b=>refKey(b.ref)===refKey(prior.ref)&&DateTime.fromISO(b.end).toUTC()<=DateTime.fromISO(item.start).toUTC());
-      const coveredMinutes=covered.reduce((sum,b)=>sum+mins(b.start,b.end),0);
-      if(coveredMinutes<prior.estimateMinutes)throw new Error("A selected successor is not covered by completed or approved prerequisite work that finishes first.");
+  const priorConflicts=conflictSeverity(data.blocks,data.events,approvalNow),nextConflicts=conflictSeverity(blocks,data.events,approvalNow);
+  for(const [key,severity] of nextConflicts)if(severity>(priorConflicts.get(key)||0))throw new Error("These selected changes introduce or worsen an overlap with approved work or a fixed calendar event. Review the conflicting changes together.");
+  const affectedParents=new Map<string,TaskRef>();
+  for(const ref of [...requested.map(x=>x.ref),...requestedMoves.map(x=>x.ref),...requestedRemovals.map(x=>x.ref)]){const row=data.tasks.find(x=>refKey(x.ref)===refKey(ref));if(row?.parent)affectedParents.set(refKey(row.parent),row.parent);}
+  for(const parent of affectedParents.values()){const children=data.tasks.filter(x=>x.parent&&refKey(x.parent)===refKey(parent));
+    for(const successor of children){const successorTask=state.tasks.find(t=>t.id===successor.ref.taskId&&t.sourceId===successor.ref.sourceId);if(successorTask?.completed)continue;
+      const successorBlocks=blocks.filter(b=>refKey(b.ref)===refKey(successor.ref)&&DateTime.fromISO(b.start).toUTC()>approvalNow.toUTC());
+      for(const successorBlock of successorBlocks){const successorStart=DateTime.fromISO(successorBlock.start).toUTC();
+        for(const prior of children.filter(x=>x.stepOrder<successor.stepOrder)){const priorTask=state.tasks.find(t=>t.id===prior.ref.taskId&&t.sourceId===prior.ref.sourceId);if(priorTask?.completed)continue;
+          if(prior.estimateMinutes===null)throw new Error("A future breakdown step still has an unknown prerequisite. Approve or complete every earlier step first.");
+          const covered=blocks.filter(b=>refKey(b.ref)===refKey(prior.ref)&&DateTime.fromISO(b.end).toUTC()>approvalNow.toUTC()&&DateTime.fromISO(b.end).toUTC()<=successorStart);
+          const coveredMinutes=covered.reduce((sum,b)=>sum+mins(DateTime.fromISO(b.start).toUTC()>approvalNow.toUTC()?b.start:approvalNow.toUTC().toISO()!,b.end),0);
+          if(coveredMinutes<prior.estimateMinutes)throw new Error("A future breakdown step is not covered by completed or approved prerequisite work that finishes first.");
+        }
+      }
     }
   }
   return { ...data, blocks };
