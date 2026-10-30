@@ -1,6 +1,6 @@
 {
   "name": "notion-tasks-desktop",
-  "version": "0.1.7",
+  "version": "0.1.8-rc.1",
   "private": true,
   "description": "A personal Windows task app and compact widget for Notion databases",
   "author": "Notion Tasks",
