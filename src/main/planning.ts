@@ -2,6 +2,8 @@ import { DateTime, Interval } from "luxon";
 import type { AppState, CalendarEvent, OwnedBlock, PlanProposal, PlanningData, SourceProvider, Task, TaskRef } from "../shared/types";
 
 export const MAX_ESTIMATE_MINUTES = 100_000;
+export const PLAN_REVIEW_BUFFER_MINUTES = 5;
+export const PLAN_REVIEW_TTL_MINUTES = 30;
 export const DEFAULT_PLANNING: PlanningData = {
   tasks: [], events: [], calendarImportedAt: null, calendarSource: null, operations: [],
   settings: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", workdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17, allowEmptyCalendar: false },
@@ -84,7 +86,8 @@ export function generatePlan(data: PlanningData, state: AppState, now = DateTime
   const conflicts = new Set(movable.filter(b=>fixed.some(f=>{const block=Interval.fromDateTimes(DateTime.fromISO(b.start).toUTC(),DateTime.fromISO(b.end).toUTC());const isOwnCopy=f.event.id===`${b.id}@notion-tasks.local`&&f.interval.start!.toMillis()===block.start!.toMillis()&&f.interval.end!.toMillis()===block.end!.toMillis();return !isOwnCopy&&block.overlaps(f.interval);})).map(b=>b.id));
   const busy: Interval[] = [...fixed.map(x=>x.interval), ...data.blocks.filter(b=>DateTime.fromISO(b.end)>now.toUTC()&&!conflicts.has(b.id)).map(b=>Interval.fromDateTimes(DateTime.fromISO(b.start).toUTC(),DateTime.fromISO(b.end).toUTC()))];
   const gaps: Interval[] = [];
-  for (let i=0;i<7;i++) { const day=horizonStart.plus({days:i}); if (!workdays.includes(day.weekday)) continue; const start=day.set({hour:startHour,minute:0,second:0,millisecond:0}); const end=day.set({hour:endHour,minute:0,second:0,millisecond:0}); const actualStart=i===0 && now>start ? now : start; if (end<=actualStart) continue; let cursor=actualStart.toUTC(); const bounds=Interval.fromDateTimes(actualStart.toUTC(),end.toUTC());
+  const reviewReadyAt = now.plus({ minutes: PLAN_REVIEW_BUFFER_MINUTES });
+  for (let i=0;i<7;i++) { const day=horizonStart.plus({days:i}); if (!workdays.includes(day.weekday)) continue; const start=day.set({hour:startHour,minute:0,second:0,millisecond:0}); const end=day.set({hour:endHour,minute:0,second:0,millisecond:0}); const actualStart=i===0 && reviewReadyAt>start ? reviewReadyAt : start; if (end<=actualStart) continue; let cursor=actualStart.toUTC(); const bounds=Interval.fromDateTimes(actualStart.toUTC(),end.toUTC());
     const cuts=busy.filter(x=>x.overlaps(bounds)).sort((a,b)=>a.start!.toMillis()-b.start!.toMillis()); for(const cut of cuts){if(cut.start!>cursor) gaps.push(Interval.fromDateTimes(cursor,cut.start!)); if(cut.end!>cursor) cursor=cut.end!;} if(cursor<end.toUTC()) gaps.push(Interval.fromDateTimes(cursor,end.toUTC())); }
   const totalCapacityMinutes=gaps.reduce((n,g)=>n+Math.floor(g.length("minutes")),0);
   const moves: PlanProposal["moves"]=[];
@@ -103,21 +106,38 @@ export function generatePlan(data: PlanningData, state: AppState, now = DateTime
     const estimate=row.row?.estimateMinutes ?? null; const remaining=estimate===null?null:Math.max(0,estimate-(futureAllocated.get(refKey(row.ref))||0)); if(remaining===null){unscheduled.push({ref:row.ref,reason:"No estimate",minutes:null});if(parent)blockedBreakdowns.add(parentKey);processedBreakdownTasks.add(refKey(row.ref));continue;} if(remaining===0){const ends=data.blocks.filter(b=>refKey(b.ref)===refKey(row.ref)&&DateTime.fromISO(b.end)>now.toUTC()).map(b=>DateTime.fromISO(b.end).toUTC());if(ends.length)breakdownReadyAt.set(refKey(row.ref),ends.reduce((a,b)=>a>b?a:b));processedBreakdownTasks.add(refKey(row.ref));continue;} const due=taskDeadline(row.task,timezone); let minutes=remaining; let placed=false;const ready=parent?breakdownReadyAt.get(parentKey):undefined;
     for(let i=0;i<gaps.length;i++){const gap=gaps[i]; const start=ready&&ready>gap.start!?ready:gap.start!;const overdue=Boolean(due&&due<now);const cutoff=due&&!overdue?DateTime.min(gap.end!,due.toUTC()):gap.end!; if(cutoff<=start)continue; if(Math.floor(cutoff.diff(start,"minutes").minutes)<minutes)continue; const end=start.plus({minutes}); items.push({ref:row.ref,start:start.toISO()!,end:end.toISO()!,minutes,reason:overdue?"Overdue work; approval required":"Fits available working time"}); allocatedMinutes+=minutes;const preserve:Interval[]=[];if(gap.start!<start)preserve.push(Interval.fromDateTimes(gap.start!,start));if(end<gap.end!)preserve.push(Interval.fromDateTimes(end,gap.end!));gaps.splice(i,1,...preserve);placed=true;break;}
     if(placed){const item=items.at(-1)!;if(parent)breakdownReadyAt.set(refKey(row.ref),DateTime.fromISO(item.end).toUTC());}else{const deadlineMiss=Boolean(due&&due>=now&&gaps.some(g=>g.start!>due&&Math.floor(g.length("minutes"))>=minutes));unscheduled.push({ref:row.ref,reason:due&&due<now?"Overdue; no fitting time in the horizon":deadlineMiss?"Deadline cannot be met in the available working time":"No fitting gap in the next seven days",minutes});if(parent)blockedBreakdowns.add(parentKey);}processedBreakdownTasks.add(refKey(row.ref)); }
-  return {id:`plan-${Date.now()}-${data.inputRevision}`,inputRevision:data.inputRevision,generatedAt:now.toUTC().toISO()!,items,moves,removals,unscheduled,capacityMinutes:totalCapacityMinutes,allocatedMinutes:allocatedMinutes+moves.filter(m=>m.start).reduce((n,m)=>n+m.minutes,0)};
+  return {id:`plan-${Date.now()}-${data.inputRevision}`,inputRevision:data.inputRevision,generatedAt:now.toUTC().toISO()!,expiresAt:now.plus({minutes:PLAN_REVIEW_TTL_MINUTES}).toUTC().toISO()!,items,moves,removals,unscheduled,capacityMinutes:totalCapacityMinutes,allocatedMinutes:allocatedMinutes+moves.filter(m=>m.start).reduce((n,m)=>n+m.minutes,0)};
 }
 
 export function approvePlan(data: PlanningData, state: AppState, proposal: PlanProposal, selected: string[], approvalNow = DateTime.now().setZone(data.settings.timezone)): PlanningData {
+  const validSelections=new Set([...proposal.items.map(x=>refKey(x.ref)),...proposal.moves.filter(x=>x.start).map(x=>`move:${x.blockId}`),...proposal.removals.map(x=>`remove:${x.blockId}`)]);
+  if(new Set(selected).size!==selected.length||selected.some(key=>!validSelections.has(key)))throw new Error("The selected plan changes are invalid. Review the current proposal and try again.");
   const chosen=new Set(selected); const requested=proposal.items.filter(x=>chosen.has(refKey(x.ref))); const requestedMoves=proposal.moves.filter(x=>x.start&&chosen.has(`move:${x.blockId}`)); const requestedRemovals=proposal.removals.filter(x=>chosen.has(`remove:${x.blockId}`));
   const requestedIds=requested.map(x=>`${proposal.id}-${encodeURIComponent(refKey(x.ref))}-${DateTime.fromISO(x.start).toMillis()}`);
   if((requestedIds.length+requestedRemovals.length+requestedMoves.length)>0&&requestedIds.every(id=>data.blocks.some(b=>b.id===id))&&requestedRemovals.every(r=>!data.blocks.some(b=>b.id===r.blockId))&&requestedMoves.every(m=>data.blocks.some(b=>b.id===m.blockId&&b.start===m.start&&b.end===m.end)))return data;
   if(proposal.inputRevision!==data.inputRevision) throw new Error("This plan is stale. Generate a fresh review before approving.");
   const generatedAt=DateTime.fromISO(proposal.generatedAt).setZone(data.settings.timezone); if(!generatedAt.isValid)throw new Error("Plan timestamp is invalid.");
-  if(generatedAt.startOf("day").toMillis()!==approvalNow.setZone(data.settings.timezone).startOf("day").toMillis()||requested.some(x=>DateTime.fromISO(x.start)<=approvalNow.toUTC())||requestedMoves.some(x=>DateTime.fromISO(x.start)<=approvalNow.toUTC())||requestedRemovals.some(x=>{const block=data.blocks.find(b=>b.id===x.blockId);return !block||DateTime.fromISO(block.start)<=approvalNow.toUTC();}))throw new Error("This plan is stale because time has passed or the local date changed. Generate a fresh review.");
+  const expiresAt=DateTime.fromISO(proposal.expiresAt).toUTC();
+  if(!expiresAt.isValid||approvalNow.toUTC()>expiresAt||generatedAt.startOf("day").toMillis()!==approvalNow.setZone(data.settings.timezone).startOf("day").toMillis()||requested.some(x=>DateTime.fromISO(x.start)<=approvalNow.toUTC())||requestedMoves.some(x=>DateTime.fromISO(x.start)<=approvalNow.toUTC())||requestedRemovals.some(x=>{const block=data.blocks.find(b=>b.id===x.blockId);return !block||DateTime.fromISO(block.start)<=approvalNow.toUTC();}))throw new Error("This plan is stale because its review window expired, time passed, or the local date changed. Generate a fresh review.");
   const fresh=generatePlan(data,state,generatedAt); if(fresh.items.length!==proposal.items.length || fresh.items.some((item,i)=>refKey(item.ref)!==refKey(proposal.items[i]?.ref)||item.start!==proposal.items[i]?.start||item.end!==proposal.items[i]?.end)||fresh.moves.length!==proposal.moves.length||fresh.moves.some((item,i)=>item.blockId!==proposal.moves[i]?.blockId||item.start!==proposal.moves[i]?.start||item.end!==proposal.moves[i]?.end)||fresh.removals.length!==proposal.removals.length||fresh.removals.some((item,i)=>item.blockId!==proposal.removals[i]?.blockId||item.reason!==proposal.removals[i]?.reason)) throw new Error("Planning inputs changed. Generate a fresh review before approving.");
   const additions=requested.map(x=>({id:`${proposal.id}-${encodeURIComponent(refKey(x.ref))}-${DateTime.fromISO(x.start).toMillis()}`,ref:x.ref,start:x.start,end:x.end,approvedAt:new Date().toISOString()}));
   const removed=new Set([...requestedRemovals.map(x=>x.blockId),...requestedMoves.map(x=>x.blockId)]);
   const moved:OwnedBlock[]=requestedMoves.map(m=>({id:m.blockId,ref:m.ref,start:m.start,end:m.end,approvedAt:new Date().toISOString()}));
-  return { ...data, blocks:[...data.blocks.filter(b=>!removed.has(b.id)),...moved,...additions.filter(x=>!data.blocks.some(b=>b.id===x.id))] };
+  const blocks=[...data.blocks.filter(b=>!removed.has(b.id)),...moved,...additions.filter(x=>!data.blocks.some(b=>b.id===x.id))];
+  const active=blocks.filter(b=>DateTime.fromISO(b.end).toUTC()>approvalNow.toUTC());
+  for(let i=0;i<active.length;i++)for(let j=i+1;j<active.length;j++)if(Interval.fromDateTimes(DateTime.fromISO(active[i].start).toUTC(),DateTime.fromISO(active[i].end).toUTC()).overlaps(Interval.fromDateTimes(DateTime.fromISO(active[j].start).toUTC(),DateTime.fromISO(active[j].end).toUTC())))throw new Error("These selected changes overlap retained approved work. Select its proposed move or removal, then review again.");
+  for(const block of active)for(const event of data.events)if(Interval.fromDateTimes(DateTime.fromISO(block.start).toUTC(),DateTime.fromISO(block.end).toUTC()).overlaps(Interval.fromDateTimes(DateTime.fromISO(event.start).toUTC(),DateTime.fromISO(event.end).toUTC())))throw new Error("These selected changes overlap a fixed calendar event. Select the proposed move or removal, then review again.");
+  for(const item of requested){
+    const row=data.tasks.find(x=>refKey(x.ref)===refKey(item.ref)); if(!row?.parent)continue;
+    const predecessors=data.tasks.filter(x=>x.parent&&refKey(x.parent)===refKey(row.parent!)&&x.stepOrder<row.stepOrder);
+    for(const prior of predecessors){const priorTask=state.tasks.find(t=>t.id===prior.ref.taskId&&t.sourceId===prior.ref.sourceId);if(priorTask?.completed)continue;
+      if(prior.estimateMinutes===null)throw new Error("A selected successor still has an unknown prerequisite. Approve or complete every earlier step first.");
+      const covered=blocks.filter(b=>refKey(b.ref)===refKey(prior.ref)&&DateTime.fromISO(b.end).toUTC()<=DateTime.fromISO(item.start).toUTC());
+      const coveredMinutes=covered.reduce((sum,b)=>sum+mins(b.start,b.end),0);
+      if(coveredMinutes<prior.estimateMinutes)throw new Error("A selected successor is not covered by completed or approved prerequisite work that finishes first.");
+    }
+  }
+  return { ...data, blocks };
 }
 
 function unfold(text:string):string[] { return text.replace(/\r?\n[ \t]/g,"").split(/\r?\n/); }
