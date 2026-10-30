@@ -17,12 +17,22 @@ export function cleanTaskOwners(value: unknown): TaskOwner[] {
  return [...owners.values()];
 }
 export interface Task { id: string; sourceId: string; name: string; url: string; due: TaskDate; status: string; completed: boolean; lastEdited: string; owners?: TaskOwner[] }
+export interface TaskRef { provider: SourceProvider; sourceId: string; taskId: string }
+export interface TaskPlanning { ref: TaskRef; estimateMinutes: number | null; parent: TaskRef | null; stepOrder: number; selected: boolean }
+export interface CalendarEvent { id: string; title: string; start: string; end: string; allDay?: boolean }
+export interface OwnedBlock { id: string; ref: TaskRef; start: string; end: string; approvedAt: string }
+export interface PlanningSettings { timezone: string; workdays: number[]; startHour: number; endHour: number; allowEmptyCalendar: boolean }
+export interface BreakdownStep { name: string; estimateMinutes: number; order: number }
+export type BreakdownStepStatus = 'pending' | 'creating' | 'created' | 'failed' | 'recovery-needed';
+export interface BreakdownOperation { id: string; parent: TaskRef; steps: (BreakdownStep & { status: BreakdownStepStatus; ref?: TaskRef; message?: string })[]; status: 'in-progress' | 'complete' | 'recovery-needed'; updatedAt: string }
+export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[] }
+export interface PlanProposal { id: string; inputRevision: number; generatedAt: string; expiresAt: string; items: { ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; moves: { blockId: string; ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; removals: { blockId: string; ref: TaskRef; reason: string }[]; unscheduled: { ref: TaskRef; reason: string; minutes: number | null }[]; capacityMinutes: number; allocatedMinutes: number }
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
 export interface SourceCandidate { id: string; databaseId: string; name: string; properties: PropertyInfo[]; provider?: SourceProvider; workspaceSlug?: string; projectId?: string; baseUrl?: string }
 export interface SourceConfig extends SourceCandidate { color?: SourceColor; mapping: { title: string; due: string | null; status: string; complete: string; reopen: string; owner?: string | null } }
 export interface DesktopSettings { compact: boolean; showOverdue?: boolean; alwaysOnTop: boolean; launchAtLogin: boolean; selectedList: string; lastSourceId: string; theme?: ThemePreference; bounds?: { x: number; y: number; width: number; height: number }; fullBounds?: { x: number; y: number; width: number; height: number }; compactBounds?: { x: number; y: number; width: number; height: number } }
 export interface SyncState { syncing: boolean; lastSync: string | null; errors: Record<string, string>; onlineSources: string[] }
-export interface AppState { connected: boolean; sources: SourceConfig[]; tasks: Task[]; stars: string[]; settings: DesktopSettings; sync: SyncState; connections?: Partial<Record<SourceProvider, ProviderConnectionState>> }
+export interface AppState { connected: boolean; sources: SourceConfig[]; tasks: Task[]; stars: string[]; settings: DesktopSettings; sync: SyncState; connections?: Partial<Record<SourceProvider, ProviderConnectionState>>; planning?: PlanningData }
 export interface TaskChanges { name?: string; due?: TaskDate; status?: string }
 export interface UpdateResult { task: Task; conflict?: boolean }
 export interface AppUpdateState {
@@ -52,6 +62,16 @@ export interface DesktopAPI {
  updateTask(id: string, changes: TaskChanges, expected: Task): Promise<UpdateResult>;
  toggleStar(id: string): Promise<AppState>;
  setSettings(settings: Partial<DesktopSettings>): Promise<AppState>;
+  setTaskEstimate(ref: TaskRef, minutes: number | null): Promise<AppState>;
+  linkBreakdown(parent: TaskRef, children: { ref: TaskRef; estimateMinutes: number; order: number }[]): Promise<AppState>;
+  createBreakdown(operationId: string, parent: TaskRef, steps: BreakdownStep[]): Promise<AppState>;
+  reconcileBreakdownStep(operationId: string, order: number, resolution: { kind: 'existing-task'; ref: TaskRef } | { kind: 'confirm-not-created' }): Promise<AppState>;
+  updatePlanningSettings(settings: Partial<PlanningSettings>): Promise<AppState>;
+  importCalendar(ics: string): Promise<AppState>;
+  addCalendarEvent(event: Omit<CalendarEvent, 'id'>): Promise<AppState>;
+  generatePlan(): Promise<PlanProposal>;
+  approvePlan(proposal: PlanProposal, selected: string[]): Promise<AppState>;
+  exportCalendar(): Promise<string>;
  openNotion(id: string): Promise<void>;
  onState(callback: (state: AppState) => void): () => void;
 }

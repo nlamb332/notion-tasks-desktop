@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { SOURCE_COLORS, type AppState, type AppUpdateState, type ConnectionConfig, type DesktopAPI, type PlaneConnectionInput, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type UpdateResult } from "./shared/types";
+import { SOURCE_COLORS, type AppState, type AppUpdateState, type BreakdownStep, type CalendarEvent, type ConnectionConfig, type DesktopAPI, type PlanProposal, type PlaneConnectionInput, type PlanningSettings, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type TaskRef, type UpdateResult } from "./shared/types";
 
 const channels = {
   getState: "desktop:get-state",
@@ -16,6 +16,7 @@ const channels = {
   toggleStar: "desktop:toggle-star",
   setSourceColor: "desktop:set-source-color",
   setSettings: "desktop:set-settings",
+  planningEstimate: "desktop:planning-estimate", planningLinks: "desktop:planning-links", planningCreateBreakdown: "desktop:planning-create-breakdown", planningReconcileBreakdown: "desktop:planning-reconcile-breakdown", planningSettings: "desktop:planning-settings", calendarImport: "desktop:calendar-import", calendarAdd: "desktop:calendar-add-event", planGenerate: "desktop:plan-generate", planApprove: "desktop:plan-approve", calendarExport: "desktop:calendar-export",
   openNotion: "desktop:open-notion",
   state: "desktop:state",
 } as const;
@@ -105,6 +106,16 @@ const desktop: DesktopAPI = {
   toggleStar: (id) => ipcRenderer.invoke(channels.toggleStar, ensureString(id, "id")),
   setSourceColor: (sourceId, color) => ipcRenderer.invoke(channels.setSourceColor, ensureString(sourceId, "sourceId"), ensureSourceColor(color)),
   setSettings: (settings) => ipcRenderer.invoke(channels.setSettings, settings),
+  setTaskEstimate: (ref: TaskRef, minutes: number | null) => ipcRenderer.invoke(channels.planningEstimate, ref, minutes),
+  linkBreakdown: (parent: TaskRef, children) => ipcRenderer.invoke(channels.planningLinks, parent, children),
+  createBreakdown: (operationId: string, parent: TaskRef, steps: BreakdownStep[]) => ipcRenderer.invoke(channels.planningCreateBreakdown, operationId, parent, steps),
+  reconcileBreakdownStep: (operationId, order, resolution) => ipcRenderer.invoke(channels.planningReconcileBreakdown, operationId, order, resolution),
+  updatePlanningSettings: (settings: Partial<PlanningSettings>) => ipcRenderer.invoke(channels.planningSettings, settings),
+  importCalendar: (ics: string) => ipcRenderer.invoke(channels.calendarImport, ensureString(ics, "calendar")),
+  addCalendarEvent: (event: Omit<CalendarEvent, "id">) => ipcRenderer.invoke(channels.calendarAdd, event),
+  generatePlan: (): Promise<PlanProposal> => ipcRenderer.invoke(channels.planGenerate),
+  approvePlan: (proposal: PlanProposal, selected: string[]) => ipcRenderer.invoke(channels.planApprove, proposal, selected),
+  exportCalendar: (): Promise<string> => ipcRenderer.invoke(channels.calendarExport),
   openNotion: (id) => ipcRenderer.invoke(channels.openNotion, ensureString(id, "id")),
   onState: (callback) => {
     if (typeof callback !== "function") throw new TypeError("callback must be a function");
