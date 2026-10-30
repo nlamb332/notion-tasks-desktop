@@ -34,6 +34,27 @@ describe("rolling calendar planning",()=>{
     const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
     expect(()=>parseCalendarICS(ics,"America/Chicago")).toThrow(/recurring/i);
   });
+  it("rejects recurrence properties with parameters regardless of property-name case",()=>{
+    for(const recurrence of [
+      "RDATE;TZID=America/Chicago:20261103T090000",
+      "EXDATE;VALUE=DATE:20261103",
+      "rdate;TZID=America/Chicago:20261103T090000",
+      "exdate;value=date:20261103",
+      "Recurrence-Id;VALUE=DATE:20261103",
+      "RRULE;X-TEST=1:FREQ=WEEKLY",
+    ]) {
+      const ics=`BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\n${recurrence}\r\nEND:VEVENT\r\nEND:VCALENDAR`;
+      expect(()=>parseCalendarICS(ics,"America/Chicago"),recurrence).toThrow(/recurring/i);
+    }
+  });
+  it("unfolds recurrence properties before validating them",()=>{
+    const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nrRule:FREQ=WEEKLY;\r\n BYDAY=MO\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    expect(()=>parseCalendarICS(ics,"America/Chicago")).toThrow(/recurring/i);
+  });
+  it("imports ordinary parameterized events and does not confuse description text for a property",()=>{
+    const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:ordinary\r\nDTSTART;TZID=America/Chicago:20261103T090000\r\nDTEND;TZID=America/Chicago:20261103T100000\r\nSUMMARY;LANGUAGE=en:Planning\r\nDESCRIPTION:Please check the RRULE: text in the calendar guide.\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    expect(parseCalendarICS(ics,"America/Chicago").events).toEqual([{id:"ordinary",title:"Planning",start:"2026-11-03T15:00:00.000Z",end:"2026-11-03T16:00:00.000Z",allDay:false}]);
+  });
   it("blocks later breakdown steps behind an unknown predecessor",()=>{
     const s=state([task("parent"),task("step-a"),task("step-b")]);let d=setEstimate(DEFAULT_PLANNING,ref("parent"),null);d=linkChildren(d,ref("parent"),[{ref:ref("step-a"),estimateMinutes:20,order:0},{ref:ref("step-b"),estimateMinutes:30,order:1}]);d={...d,tasks:d.tasks.map(x=>x.ref.taskId==="step-a"?{...x,estimateMinutes:null}:x)};
     const p=generatePlan({...d,calendarImportedAt:"snapshot",calendarSource:"ics"},s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"));
