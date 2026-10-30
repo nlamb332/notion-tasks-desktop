@@ -32,6 +32,12 @@ describe("rolling calendar planning",()=>{
     expect(()=>approvePlan({...d,inputRevision:d.inputRevision+1},s,proposal,[JSON.stringify(["notion","db","a"])] )).toThrow(/stale/i);
     const asOf=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const first=approvePlan(d,s,proposal,[JSON.stringify(["notion","db","a"])],asOf);const second=approvePlan(first,s,proposal,[JSON.stringify(["notion","db","a"])],asOf);expect(second.blocks).toHaveLength(1);
   });
+  it("leaves review time before today's first proposal and accepts a delayed approval within the review window",()=>{
+    const s=state([task("a")]);const d={...setEstimate(DEFAULT_PLANNING,ref("a"),30),calendarImportedAt:"snapshot",calendarSource:"ics" as const};const generated=DateTime.fromISO("2026-11-02T15:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,generated);
+    expect(DateTime.fromISO(p.items[0].start).diff(generated,"minutes").minutes).toBe(5);
+    const approved=approvePlan(d,s,p,[JSON.stringify(["notion","db","a"])],generated.plus({minutes:2}));expect(approved.blocks).toHaveLength(1);
+    expect(()=>approvePlan(d,s,p,[JSON.stringify(["notion","db","a"])],generated.plus({minutes:31}))).toThrow(/expired/i);
+  });
   it("does not treat manual commitments as a complete calendar without explicit empty-calendar choice",()=>{
     const s=state([task("a")]);const d={...setEstimate(DEFAULT_PLANNING,ref("a"),30),calendarImportedAt:"manual",calendarSource:"manual" as const,events:[{id:"manual",title:"Appointment",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"}]};
     expect(()=>generatePlan(d,s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"))).toThrow(/complete/i);
@@ -40,6 +46,27 @@ describe("rolling calendar planning",()=>{
   it("rejects recurrence without replacing the prior snapshot",()=>{
     const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
     expect(()=>parseCalendarICS(ics,"America/Chicago")).toThrow(/recurring/i);
+  });
+  it("rejects recurrence properties with parameters regardless of property-name case",()=>{
+    for(const recurrence of [
+      "RDATE;TZID=America/Chicago:20261103T090000",
+      "EXDATE;VALUE=DATE:20261103",
+      "rdate;TZID=America/Chicago:20261103T090000",
+      "exdate;value=date:20261103",
+      "Recurrence-Id;VALUE=DATE:20261103",
+      "RRULE;X-TEST=1:FREQ=WEEKLY",
+    ]) {
+      const ics=`BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\n${recurrence}\r\nEND:VEVENT\r\nEND:VCALENDAR`;
+      expect(()=>parseCalendarICS(ics,"America/Chicago"),recurrence).toThrow(/recurring/i);
+    }
+  });
+  it("unfolds recurrence properties before validating them",()=>{
+    const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nrRule:FREQ=WEEKLY;\r\n BYDAY=MO\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    expect(()=>parseCalendarICS(ics,"America/Chicago")).toThrow(/recurring/i);
+  });
+  it("imports ordinary parameterized events and does not confuse description text for a property",()=>{
+    const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:ordinary\r\nDTSTART;TZID=America/Chicago:20261103T090000\r\nDTEND;TZID=America/Chicago:20261103T100000\r\nSUMMARY;LANGUAGE=en:Planning\r\nDESCRIPTION:Please check the RRULE: text in the calendar guide.\r\nEND:VEVENT\r\nEND:VCALENDAR";
+    expect(parseCalendarICS(ics,"America/Chicago").events).toEqual([{id:"ordinary",title:"Planning",start:"2026-11-03T15:00:00.000Z",end:"2026-11-03T16:00:00.000Z",allDay:false}]);
   });
   it("blocks later breakdown steps behind an unknown predecessor",()=>{
     const s=state([task("parent"),task("step-a"),task("step-b")]);let d=setEstimate(DEFAULT_PLANNING,ref("parent"),null);d=linkChildren(d,ref("parent"),[{ref:ref("step-a"),estimateMinutes:20,order:0},{ref:ref("step-b"),estimateMinutes:30,order:1}]);d={...d,tasks:d.tasks.map(x=>x.ref.taskId==="step-a"?{...x,estimateMinutes:null}:x)};
@@ -55,6 +82,44 @@ describe("rolling calendar planning",()=>{
     const s=state([task("a")]);let d=setEstimate(DEFAULT_PLANNING,ref("a"),30);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",events:[{id:"meeting",title:"Meeting",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"}],blocks:[{id:"owned",ref:ref("a"),start:"2026-11-02T15:30:00Z",end:"2026-11-02T16:00:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};
     const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const proposal=generatePlan(d,s,now);expect(proposal.moves).toHaveLength(1);expect(proposal.moves[0].start).toBe("2026-11-02T16:00:00.000Z");expect(d.blocks[0].start).toBe("2026-11-02T15:30:00Z");
     const key=`move:${proposal.moves[0].blockId}`;const approved=approvePlan(d,s,proposal,[key],now);expect(approved.blocks[0]).toMatchObject({id:"owned",start:proposal.moves[0].start,end:proposal.moves[0].end});expect(approvePlan(approved,s,proposal,[key],now)).toEqual(approved);
+  });
+  it("rejects a selected addition that overlaps an unchecked move's retained original block",()=>{
+    const s=state([task("a"),task("b")]);let d=setEstimate(DEFAULT_PLANNING,ref("a"),60);d=setEstimate(d,ref("b"),30);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",events:[{id:"meeting",title:"Meeting",start:"2026-11-02T15:30:00Z",end:"2026-11-02T16:30:00Z"}],blocks:[{id:"owned-a",ref:ref("a"),start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};
+    const now=DateTime.fromISO("2026-11-02T14:55:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);expect(p.moves).toHaveLength(1);expect(p.items.find(x=>x.ref.taskId==="b")?.start).toBe("2026-11-02T15:00:00.000Z");
+    expect(()=>approvePlan(d,s,p,[JSON.stringify(["notion","db","b"])],now)).toThrow(/overlap/i);
+    const approved=approvePlan(d,s,p,[`move:owned-a`,JSON.stringify(["notion","db","b"])],now);expect(approved.blocks).toHaveLength(2);
+  });
+  it("keeps an unchecked removal and its block when approving another task",()=>{
+    const s=state([task("done",true),task("new")]);let d=setEstimate(DEFAULT_PLANNING,ref("new"),30);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",blocks:[{id:"done-block",ref:ref("done"),start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:30:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const now=DateTime.fromISO("2026-11-02T13:55:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);
+    const approved=approvePlan(d,s,p,[JSON.stringify(["notion","db","new"])],now);expect(approved.blocks.some(b=>b.id==="done-block")).toBe(true);expect(approved.blocks.some(b=>b.ref.taskId==="new")).toBe(true);
+  });
+  it("rejects successor-only approval unless earlier effort is already covered",()=>{
+    const s=state([task("parent"),task("first"),task("second")]);let d=setEstimate(DEFAULT_PLANNING,ref("parent"),null);d=linkChildren(d,ref("parent"),[{ref:ref("first"),estimateMinutes:20,order:0},{ref:ref("second"),estimateMinutes:30,order:1}]);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics"};const now=DateTime.fromISO("2026-11-02T13:55:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);
+    expect(()=>approvePlan(d,s,p,[JSON.stringify(["notion","db","second"])],now)).toThrow(/prerequisite/i);
+    expect(approvePlan(d,s,p,p.items.map(x=>JSON.stringify(["notion","db",x.ref.taskId])),now).blocks).toHaveLength(2);
+    const priorCompleted=state([task("parent"),task("first",true),task("second")]);const completedProposal=generatePlan(d,priorCompleted,now);expect(approvePlan(d,priorCompleted,completedProposal,[JSON.stringify(["notion","db","second"])],now).blocks).toHaveLength(1);
+  });
+  it("checks retained successors when a selected move delays their prerequisite",()=>{
+    const s=state([task("parent"),task("first"),task("second")]);let d=linkChildren(setEstimate(DEFAULT_PLANNING,ref("parent"),null),ref("parent"),[{ref:ref("first"),estimateMinutes:60,order:0},{ref:ref("second"),estimateMinutes:30,order:1}]);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",events:[{id:"meeting",title:"Meeting",start:"2026-11-02T15:00:00Z",end:"2026-11-02T15:30:00Z"}],blocks:[{id:"first-block",ref:ref("first"),start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z",approvedAt:"2026-10-30T00:00:00Z"},{id:"second-block",ref:ref("second"),start:"2026-11-02T15:30:00Z",end:"2026-11-02T16:00:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);
+    expect(p.moves.find(x=>x.blockId==="first-block")?.start).toBe("2026-11-02T16:00:00.000Z");expect(()=>approvePlan(d,s,p,["move:first-block"],now)).toThrow(/breakdown step/i);
+  });
+  it("checks a selected successor move against the retained predecessor",()=>{
+    const s=state([task("parent"),task("first"),task("second")]);let d=linkChildren(setEstimate(DEFAULT_PLANNING,ref("parent"),null),ref("parent"),[{ref:ref("first"),estimateMinutes:20,order:0},{ref:ref("second"),estimateMinutes:20,order:1}]);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",events:[{id:"meeting",title:"Meeting",start:"2026-11-02T16:30:00Z",end:"2026-11-02T17:00:00Z"}],blocks:[{id:"first-block",ref:ref("first"),start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:20:00Z",approvedAt:"2026-10-30T00:00:00Z"},{id:"second-block",ref:ref("second"),start:"2026-11-02T16:30:00Z",end:"2026-11-02T16:50:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);
+    expect(p.moves.find(x=>x.blockId==="second-block")?.start).toBe("2026-11-02T15:00:00.000Z");expect(()=>approvePlan(d,s,p,["move:second-block"],now)).toThrow(/breakdown step/i);
+  });
+  it("does not use a historical block as prerequisite effort",()=>{
+    const s=state([task("parent"),task("first"),task("second")]);let d=linkChildren(setEstimate(DEFAULT_PLANNING,ref("parent"),null),ref("parent"),[{ref:ref("first"),estimateMinutes:20,order:0},{ref:ref("second"),estimateMinutes:20,order:1}]);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",blocks:[{id:"historical-first",ref:ref("first"),start:"2026-11-02T13:00:00Z",end:"2026-11-02T13:20:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);
+    expect(p.items.map(x=>x.ref.taskId)).toEqual(["first","second"]);expect(()=>approvePlan(d,s,p,[JSON.stringify(["notion","db","second"])],now)).toThrow(/breakdown step/i);
+  });
+  it("rejects removal of incomplete prerequisite blocks while preserving completed-task semantics",()=>{
+    const s=state([task("parent"),task("second")]);let d=linkChildren(setEstimate(DEFAULT_PLANNING,ref("parent"),null),ref("parent"),[{ref:ref("missing-first"),estimateMinutes:20,order:0},{ref:ref("second"),estimateMinutes:20,order:1}]);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",blocks:[{id:"missing-first-block",ref:ref("missing-first"),start:"2026-11-02T15:00:00Z",end:"2026-11-02T15:20:00Z",approvedAt:"2026-10-30T00:00:00Z"},{id:"second-block",ref:ref("second"),start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:20:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);
+    expect(p.removals.some(x=>x.blockId==="missing-first-block")).toBe(true);expect(()=>approvePlan(d,s,p,["remove:missing-first-block"],now)).toThrow(/breakdown step/i);
+  });
+  it("allows an unrelated approval when an existing conflict is unchanged",()=>{
+    const s=state([task("conflicted"),task("new")]);let d=setEstimate(DEFAULT_PLANNING,ref("conflicted"),60);d=setEstimate(d,ref("new"),30);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",events:[{id:"meeting",title:"Meeting",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"}],blocks:[{id:"existing-conflict",ref:ref("conflicted"),start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);const newItem=p.items.find(x=>x.ref.taskId==="new");expect(newItem).toBeDefined();expect(approvePlan(d,s,p,[JSON.stringify(["notion","db","new"])],now).blocks.some(b=>b.ref.taskId==="new")).toBe(true);
+  });
+  it("allows approving another task when an imported event is the exact exported copy of an owned block",()=>{
+    const s=state([task("owned"),task("new")]);let d=setEstimate(DEFAULT_PLANNING,ref("owned"),30);d=setEstimate(d,ref("new"),30);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics",blocks:[{id:"owned-block",ref:ref("owned"),start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:30:00Z",approvedAt:"2026-10-30T00:00:00Z"}],events:[{id:"owned-block@notion-tasks.local",title:"owned",start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:30:00Z"}]};const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");const p=generatePlan(d,s,now);expect(approvePlan(d,s,p,[JSON.stringify(["notion","db","new"])],now).blocks.some(b=>b.ref.taskId==="new")).toBe(true);
   });
   it("ignores cancelled and transparent fixed events and rejects malformed intervals",()=>{
     const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nSTATUS:CANCELLED\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:b\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nTRANSP:TRANSPARENT\r\nEND:VEVENT\r\nEND:VCALENDAR";
