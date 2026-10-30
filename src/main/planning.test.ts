@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
 import type { AppState, TaskRef } from "../shared/types";
-import { approvePlan, DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, rollup, setEstimate } from "./planning";
+import { approvePlan, cleanPlanning, DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, rollup, setEstimate } from "./planning";
 
 const ref=(taskId:string):TaskRef=>({provider:"notion",sourceId:"db",taskId});
 function state(tasks:AppState["tasks"]):AppState{return {connected:true,sources:[{id:"db",databaseId:"db",name:"Tasks",properties:[],mapping:{title:"t",due:null,status:"s",complete:"Done",reopen:"Todo"}}],tasks,stars:[],settings:{compact:false,alwaysOnTop:false,launchAtLogin:false,selectedList:"all",lastSourceId:"db"},sync:{syncing:false,lastSync:null,errors:{},onlineSources:["db"]},planning:{...DEFAULT_PLANNING,settings:{...DEFAULT_PLANNING.settings,timezone:"America/Chicago"}}};}
@@ -19,6 +19,13 @@ describe("rolling calendar planning",()=>{
     expect(rollup(ref("parent"),d,s)).toMatchObject({total:60,remaining:60});
     const plan=generatePlan({...d,calendarImportedAt:"2026-10-30T00:00:00Z",calendarSource:"ics"},s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"));expect(plan.items.map(x=>x.ref.taskId)).toEqual(["one","two"]);
     expect(rollup(ref("parent"),d,state([task("parent"),task("one",true),task("two")]))).toMatchObject({total:60,remaining:40});
+  });
+  it("restores a partial breakdown journal and confirmed child metadata after restart",()=>{
+    const parent=ref("parent"),child=ref("created-child");const linked=linkChildren(DEFAULT_PLANNING,parent,[{ref:child,estimateMinutes:20,order:0}]);
+    const saved={...linked,operations:[{id:"op",parent,steps:[{name:"Step 1",estimateMinutes:20,order:0,status:"created" as const,ref:child},{name:"Step 2",estimateMinutes:40,order:1,status:"recovery-needed" as const,message:"Result is uncertain"}],status:"recovery-needed" as const,updatedAt:"2026-10-30T00:00:00.000Z"}]};
+    const restored=cleanPlanning(JSON.parse(JSON.stringify(saved)));
+    expect(restored.tasks.find(x=>x.ref.taskId===child.taskId)).toMatchObject({estimateMinutes:20,parent,stepOrder:0});
+    expect(restored.operations[0]).toMatchObject({status:"recovery-needed",steps:[{status:"created",ref:child},{status:"recovery-needed",message:"Result is uncertain"}]});
   });
   it("rejects an approval after input revision changes and is idempotent",()=>{
     const s=state([task("a")]);let d=setEstimate(DEFAULT_PLANNING,ref("a"),30);d={...d,calendarImportedAt:"2026-10-30T00:00:00Z",calendarSource:"ics"};const proposal=generatePlan(d,s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"));

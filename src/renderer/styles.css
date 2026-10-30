@@ -317,6 +317,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .breakdown-editor { padding: 12px; background: var(--surface-muted); border-radius: 9px; display: grid; gap: 8px; font-size: 12px; }
 .breakdown-editor p { color: var(--muted); margin: 0; }
 .breakdown-step { display: grid; grid-template-columns: 1fr 90px 32px; gap: 6px; }
+.breakdown-recovery-step { display: grid; gap: 7px; padding-top: 4px; }
+.breakdown-recovery-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.breakdown-recovery-actions select { flex: 1 1 180px; min-width: 0; }
 @media (max-width: 700px) { .planning-view { padding: 24px 14px 45px; } .planning-controls { grid-template-columns: 1fr 1fr; } .planning-controls label:first-child { grid-column: 1 / -1; } .manual-event { grid-template-columns: 1fr 1fr; } .manual-event input:first-child { grid-column: 1 / -1; } }
 .preference-list { overflow: hidden; }
 .toggle-row, .theme-row { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: 68px; padding: 0 16px; border: 0; border-bottom: 1px solid var(--line); background: white; text-align: left; }

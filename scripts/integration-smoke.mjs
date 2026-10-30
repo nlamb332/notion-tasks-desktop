@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 const root=process.cwd();
 await mkdir(path.join(root,'.cache'),{recursive:true});
 const data=await mkdtemp(path.join(root,'.cache','integration-'));
-const app=await electron.launch({args:['.'],env:{...process.env,NOTION_TASKS_USER_DATA:data},timeout:30000});
+let app=await electron.launch({args:['.'],env:{...process.env,NOTION_TASKS_USER_DATA:data},timeout:30000});
 try {
  const page=await app.firstWindow();
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
@@ -15,7 +15,7 @@ try {
    const ids=['33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444'];
    const names=['Tasks','Work Tasks'];
    const g=globalThis;
-   g.__fixture={offline:[],writes:[],pages:{},next:1};
+   g.__fixture={offline:[],writes:[],pages:{},next:1,createRequests:0,failCreateNumber:0,failCreateMode:null};
    const f=g.__fixture;
    const schema=i=>({id:ids[i],parent:{database_id:dbs[i]},title:[{plain_text:names[i]}],properties:{
      [i?'Name':'Task']:{id:'title',name:i?'Name':'Task',type:'title',title:{}},
@@ -40,10 +40,13 @@ try {
     }
     if(p.startsWith('/databases/')){const i=dbs.findIndex(id=>p.endsWith(id));return i<0?reply({},404):reply({id:dbs[i],data_sources:[{id:ids[i],name:names[i]}]});}
     if(p==='/pages'&&method==='POST'){
+      f.createRequests++;
+      const failure=f.createRequests===f.failCreateNumber?f.failCreateMode:null;
+      if(failure==='known')return reply({message:'mocked create rejected'},403);
       const body=JSON.parse(init.body);const i=ids.indexOf(body.parent.data_source_id);const id=`cccccccc-cccc-cccc-cccc-${String(f.next++).padStart(12,'0')}`;
       const next=make(id,i,'');f.pages[id]=next;
       const fields=body.properties;for(const [key,val]of Object.entries(fields)){if(key==='title')next.properties.title.title=val.title.map(x=>({plain_text:x.text.content}));else if(key==='due')next.properties.due.date=val.date;else if(key==='status'){const s=schema(i).properties.Status.status.options.find(x=>x.id===val.status.id);next.properties.status.status=s;}}
-      f.writes.push({method,body});return reply({id});
+      f.writes.push({method,body});return failure==='ambiguous'?reply({message:'mocked gateway timeout after create'},500):reply({id});
     }
     if(p.startsWith('/pages/')){
       const id=p.split('/').at(-1),row=f.pages[id];if(!row)return reply({message:'not found'},404);
@@ -86,6 +89,39 @@ try {
  const bridgeCreated=await page.evaluate(s=>window.desktop.createTask(s.id,'Created through bridge',undefined,true),sources[0]);
  const bridgeTask=bridgeCreated.tasks.find(t=>t.name==='Created through bridge');
  assert.ok(bridgeTask);assert.ok(bridgeCreated.stars.includes(bridgeTask.id));
+ const breakdownParent={provider:'notion',sourceId:sources[0].id,taskId:bridgeTask.id};
+ const recoverySteps=[{name:'Recovery child one',estimateMinutes:20,order:0},{name:'Recovery child two',estimateMinutes:40,order:1}];
+ const recoveryId='breakdown-restart-fixture';
+ await app.evaluate(()=>{const f=globalThis.__fixture;f.failCreateNumber=f.createRequests+2;f.failCreateMode='known';});
+ await assert.rejects(page.evaluate(({id,parent,steps})=>window.desktop.createBreakdown(id,parent,steps),{id:recoveryId,parent:breakdownParent,steps:recoverySteps}),/confirmed not created/i);
+ let recoveryState=await page.evaluate(()=>window.desktop.getState());
+ let recoveryOperation=recoveryState.planning.operations.find(o=>o.id===recoveryId);
+ assert.equal(recoveryOperation.steps[0].status,'created');assert.equal(recoveryOperation.steps[1].status,'failed');
+ let firstRecoveryChild=recoveryState.planning.tasks.find(x=>x.ref.taskId===recoveryOperation.steps[0].ref.taskId);
+ assert.equal(firstRecoveryChild.estimateMinutes,20);assert.equal(firstRecoveryChild.parent.taskId,bridgeTask.id);
+ await page.reload();await page.waitForFunction(()=>!!window.desktop);
+ recoveryState=await page.evaluate(()=>window.desktop.getState());recoveryOperation=recoveryState.planning.operations.find(o=>o.id===recoveryId);
+ assert.equal(recoveryOperation.steps[0].status,'created');assert.equal(recoveryState.planning.tasks.find(x=>x.ref.taskId===recoveryOperation.steps[0].ref.taskId).estimateMinutes,20);
+ recoveryState=await page.evaluate(({id,parent,steps})=>window.desktop.createBreakdown(id,parent,steps),{id:recoveryId,parent:breakdownParent,steps:recoverySteps});
+ recoveryOperation=recoveryState.planning.operations.find(o=>o.id===recoveryId);assert.equal(recoveryOperation.status,'complete');assert.equal(recoveryOperation.steps.filter(s=>s.status==='created').length,2);
+ const uncertainId='breakdown-uncertain-fixture';const uncertainSteps=[{name:'Uncertain recovery child',estimateMinutes:15,order:0},{name:'Second uncertain recovery child',estimateMinutes:25,order:1}];
+ await app.evaluate(()=>{const f=globalThis.__fixture;f.failCreateNumber=f.createRequests+1;f.failCreateMode='ambiguous';});
+ await assert.rejects(page.evaluate(({id,parent,steps})=>window.desktop.createBreakdown(id,parent,steps),{id:uncertainId,parent:breakdownParent,steps:uncertainSteps}),/result .* uncertain/i);
+ let uncertainState=await page.evaluate(()=>window.desktop.getState());let uncertainOperation=uncertainState.planning.operations.find(o=>o.id===uncertainId);
+ assert.equal(uncertainOperation.steps[0].status,'recovery-needed');
+ await page.reload();await page.waitForFunction(()=>!!window.desktop);uncertainState=await page.evaluate(()=>window.desktop.refresh());
+ uncertainOperation=uncertainState.planning.operations.find(o=>o.id===uncertainId);assert.equal(uncertainOperation.steps[0].status,'recovery-needed');
+ const discovered=uncertainState.tasks.find(t=>t.name==='Uncertain recovery child');assert.ok(discovered);
+ const discoveredRef={provider:'notion',sourceId:sources[0].id,taskId:discovered.id};
+ uncertainState=await page.evaluate(({id,ref})=>window.desktop.reconcileBreakdownStep(id,0,{kind:'existing-task',ref}),{id:uncertainId,ref:discoveredRef});
+ assert.equal(uncertainState.planning.operations.find(o=>o.id===uncertainId).status,'in-progress');
+ assert.equal(uncertainState.planning.tasks.find(x=>x.ref.taskId===discovered.id).estimateMinutes,15);
+ await app.evaluate(()=>{const f=globalThis.__fixture;f.failCreateNumber=f.createRequests+1;f.failCreateMode='ambiguous';});
+ await assert.rejects(page.evaluate(({id,parent,steps})=>window.desktop.createBreakdown(id,parent,steps),{id:uncertainId,parent:breakdownParent,steps:uncertainSteps}),/result .* uncertain/i);
+ await assert.rejects(page.evaluate(({id,ref})=>window.desktop.reconcileBreakdownStep(id,1,{kind:'existing-task',ref}),{id:uncertainId,ref:discoveredRef}),/already assigned/i);
+ uncertainState=await page.evaluate(()=>window.desktop.refresh());const secondDiscovered=uncertainState.tasks.find(t=>t.name==='Second uncertain recovery child');assert.ok(secondDiscovered);
+ uncertainState=await page.evaluate(({id,ref})=>window.desktop.reconcileBreakdownStep(id,1,{kind:'existing-task',ref}),{id:uncertainId,ref:{provider:'notion',sourceId:sources[0].id,taskId:secondDiscovered.id}});
+ assert.equal(uncertainState.planning.operations.find(o=>o.id===uncertainId).status,'complete');
  await page.evaluate(()=>window.desktop.setSettings({selectedList:'all'}));
  await page.reload();await page.waitForFunction(()=>document.documentElement.dataset.theme==='light');await page.getByRole('button',{name:'Open Created through bridge',exact:true}).waitFor();
  assert.equal(await page.locator('.sync-banner').count(),0);
@@ -115,7 +151,7 @@ try {
  await page.getByRole('textbox',{name:'Task title',exact:true}).fill('Created through interface');
  await page.locator('.draft-panel input[type="date"]').fill('2026-10-22');
  await page.getByRole('checkbox',{name:'Favorite this task',exact:true}).check();
- assert.equal((await page.evaluate(()=>window.desktop.getState())).tasks.length,3);
+ assert.equal((await page.evaluate(()=>window.desktop.getState())).tasks.length,7);
  await page.getByRole('button',{name:'Create task',exact:true}).click();
  await expect(page.locator('.draft-panel')).toHaveCount(0);
  await page.getByRole('button',{name:'All Tasks',exact:true}).click();
@@ -152,7 +188,7 @@ try {
  await page.evaluate(()=>window.desktop.setSettings({compact:false}));
  await app.evaluate((_electron,id)=>{globalThis.__fixture.offline=[id];},sources[1].id);
  state=await page.evaluate(()=>window.desktop.refresh());
- assert.equal(state.tasks.length,4);assert.equal(state.sync.onlineSources.length,1);assert.ok(state.sync.errors[sources[1].id]);
+ assert.equal(state.tasks.length,8);assert.equal(state.sync.onlineSources.length,1);assert.ok(state.sync.errors[sources[1].id]);
  await assert.rejects(page.evaluate(t=>window.desktop.updateTask(t.id,{name:'Offline edit'},t),conflict.task),/offline/i);
  await page.evaluate(t=>window.desktop.toggleStar(t.id),school);
  assert.ok((await page.evaluate(()=>window.desktop.getState())).stars.includes(school.id));
@@ -166,6 +202,20 @@ try {
  assert.ok(JSON.parse(persisted).lastSync);
  await page.evaluate(()=>window.desktop.disconnect());
  await assert.rejects(readFile(path.join(data,'notion-token.enc')),/ENOENT/);
+ const restartId='breakdown-process-restart-fixture';const restartSteps=[{name:'Restart recovery child',estimateMinutes:35,order:0}];
+ await page.evaluate(()=>window.desktop.connect('fixture-token-only'));
+ await app.evaluate(()=>{const f=globalThis.__fixture;f.failCreateNumber=f.createRequests+1;f.failCreateMode='ambiguous';});
+ await assert.rejects(page.evaluate(({id,parent,steps})=>window.desktop.createBreakdown(id,parent,steps),{id:restartId,parent:breakdownParent,steps:restartSteps}),/result .* uncertain/i);
+ const beforeRestart=await page.evaluate(()=>window.desktop.refresh());const restartChild=beforeRestart.tasks.find(t=>t.name==='Restart recovery child');assert.ok(restartChild);
+ await page.evaluate(()=>window.desktop.disconnect());await app.close();
+ app=await electron.launch({args:['.'],env:{...process.env,NOTION_TASKS_USER_DATA:data},timeout:30000});
+ const restartedPage=await app.firstWindow();await restartedPage.waitForFunction(()=>!!window.desktop);
+ let restartedState=await restartedPage.evaluate(()=>window.desktop.getState());
+ assert.equal(restartedState.planning.operations.find(o=>o.id===restartId).steps[0].status,'recovery-needed');
+ assert.ok(restartedState.tasks.some(t=>t.id===restartChild.id&&t.sourceId===restartChild.sourceId));
+ restartedState=await restartedPage.evaluate(({id,ref})=>window.desktop.reconcileBreakdownStep(id,0,{kind:'existing-task',ref}),{id:restartId,ref:{provider:'notion',sourceId:sources[0].id,taskId:restartChild.id}});
+ assert.equal(restartedState.planning.operations.find(o=>o.id===restartId).status,'complete');
+ assert.equal(restartedState.planning.tasks.find(x=>x.ref.taskId===restartChild.id).estimateMinutes,35);
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({result:'PASS',checks:['synthetic database URLs','two sources','duplicate source','persisted source tag color','explicit appearance preference','edit correct source','complete and reopen','conflict','create','partial source failure retains tasks','offline writes blocked','offline local star','Status 1 untouched','renderer list and detail','encrypted credential storage','disconnect deletes credential','last successful sync persisted'],writes:fixture.writes.length,data,screenshots:['.cache/tasks.png','.cache/details.png','.cache/compact.png']},null,2));
+ console.log(JSON.stringify({result:'PASS',checks:['synthetic database URLs','two sources','duplicate source','persisted source tag color','explicit appearance preference','edit correct source','complete and reopen','conflict','create','partial breakdown links and estimates','known failure and safe resume','ambiguous outcome and explicit reconciliation','restart recovery','duplicate child prevention','offline writes blocked','offline local star','Status 1 untouched','renderer list and detail','encrypted credential storage','disconnect deletes credential','last successful sync persisted'],writes:fixture.writes.length,data,screenshots:['.cache/tasks.png','.cache/details.png','.cache/compact.png']},null,2));
 }finally{await app.close();}

@@ -7,6 +7,7 @@ import type {
   TaskDate,
   UpdateResult,
 } from "../shared/types";
+import { TaskCreateFailure } from "./task-create-failure";
 
 const NOTION_API = "https://api.notion.com/v1";
 const NOTION_VERSION = "2025-09-03";
@@ -424,12 +425,20 @@ export class NotionService {
     const parent = idsEqual(schema.candidate.id, schema.candidate.databaseId)
       ? { database_id: schema.candidate.databaseId }
       : { data_source_id: schema.candidate.id };
-    const created = await this.request<JsonRecord>("/pages", {
-      method: "POST",
-      body: JSON.stringify({ parent, properties }),
-    });
-    if (!created?.id) throw new Error("Notion did not return the created task page ID.");
-    const page = await this.request<JsonRecord>(`/pages/${encodeURIComponent(String(created.id))}`);
+    let created: JsonRecord;
+    try {
+      created = await this.request<JsonRecord>("/pages", {
+        method: "POST",
+        body: JSON.stringify({ parent, properties }),
+      });
+    } catch (error) {
+      const rejected = error instanceof NotionHttpError && error.status >= 400 && error.status < 500;
+      throw new TaskCreateFailure(error instanceof Error ? error.message : String(error), rejected ? "not-created" : "unknown", { cause: error });
+    }
+    if (!created?.id) throw new TaskCreateFailure("Notion did not return the created task page ID.", "unknown");
+    let page: JsonRecord;
+    try { page = await this.request<JsonRecord>(`/pages/${encodeURIComponent(String(created.id))}`); }
+    catch (error) { throw new TaskCreateFailure("Notion accepted the create request, but the new page could not be read back.", "unknown", { cause: error }); }
     return pageTask(page, schema.candidate, schema.mapping);
   }
 

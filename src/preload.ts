@@ -16,7 +16,7 @@ const channels = {
   toggleStar: "desktop:toggle-star",
   setSourceColor: "desktop:set-source-color",
   setSettings: "desktop:set-settings",
-  planningEstimate: "desktop:planning-estimate", planningLinks: "desktop:planning-links", planningCreateBreakdown: "desktop:planning-create-breakdown", planningSettings: "desktop:planning-settings", calendarImport: "desktop:calendar-import", calendarAdd: "desktop:calendar-add-event", planGenerate: "desktop:plan-generate", planApprove: "desktop:plan-approve", calendarExport: "desktop:calendar-export",
+  planningEstimate: "desktop:planning-estimate", planningLinks: "desktop:planning-links", planningCreateBreakdown: "desktop:planning-create-breakdown", planningReconcileBreakdown: "desktop:planning-reconcile-breakdown", planningSettings: "desktop:planning-settings", calendarImport: "desktop:calendar-import", calendarAdd: "desktop:calendar-add-event", planGenerate: "desktop:plan-generate", planApprove: "desktop:plan-approve", calendarExport: "desktop:calendar-export",
   openNotion: "desktop:open-notion",
   state: "desktop:state",
 } as const;
@@ -109,6 +109,7 @@ const desktop: DesktopAPI = {
   setTaskEstimate: (ref: TaskRef, minutes: number | null) => ipcRenderer.invoke(channels.planningEstimate, ref, minutes),
   linkBreakdown: (parent: TaskRef, children) => ipcRenderer.invoke(channels.planningLinks, parent, children),
   createBreakdown: (operationId: string, parent: TaskRef, steps: BreakdownStep[]) => ipcRenderer.invoke(channels.planningCreateBreakdown, operationId, parent, steps),
+  reconcileBreakdownStep: (operationId, order, resolution) => ipcRenderer.invoke(channels.planningReconcileBreakdown, operationId, order, resolution),
   updatePlanningSettings: (settings: Partial<PlanningSettings>) => ipcRenderer.invoke(channels.planningSettings, settings),
   importCalendar: (ics: string) => ipcRenderer.invoke(channels.calendarImport, ensureString(ics, "calendar")),
   addCalendarEvent: (event: Omit<CalendarEvent, "id">) => ipcRenderer.invoke(channels.calendarAdd, event),
