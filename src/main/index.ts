@@ -9,11 +9,16 @@ import {
 } from "electron";
 import { ipcMain } from "electron";
 import { mkdirSync } from "node:fs";
+import { randomUUID, createHash } from "node:crypto";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DateTime } from "luxon";
 import type { IpcMainInvokeEvent } from "electron";
 import { NotionService } from "./notion";
+import { GoogleCalendarClient, GoogleOAuthClient } from "./google-calendar";
+import { NotionCalendarClient } from "./notion-calendar";
+import { refreshCalendarSnapshot } from "./calendar-sync";
+import { calendarKey, CalendarProviderError, type CalendarDefinition } from "../shared/calendar";
 import { PlaneService } from "./plane";
 import { TaskCreateFailure } from "./task-create-failure";
 import { UpdateController } from "./updates";
@@ -39,6 +44,7 @@ import {
   type ThemePreference,
   type UpdateResult,
   type PlanningSettings,
+  type PlanningData,
   type TaskRef,
   type PlanProposal,
 } from "../shared/types";
@@ -292,6 +298,8 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function notionAccountId(token: string): string { return createHash("sha256").update(token).digest("hex").slice(0,24); }
+
 export class DesktopRuntime {
   private state: AppState;
   private persistence!: AppPersistence;
@@ -312,6 +320,12 @@ export class DesktopRuntime {
   private readonly writeQueues = new Map<string, Promise<unknown>>();
   private readonly sourceWrites = new Map<string, number>();
   private updateController: UpdateController | null = null;
+  private googleOAuth: GoogleOAuthClient | null = null;
+  private googleCalendar: GoogleCalendarClient | null = null;
+  private notionCalendar: NotionCalendarClient | null = null;
+  private calendarRefreshInFlight: Promise<AppState> | null = null;
+  private approvalActive = false;
+  private readonly planAuthority = new Map<string, PlanProposal>();
 
   private updates(): UpdateController {
     if (!this.updateController) {
@@ -362,6 +376,19 @@ export class DesktopRuntime {
     this.state.settings = saved.settings;
     this.state.sync.lastSync = saved.lastSync;
     this.state.planning = saved.planning;
+    const calendarSync = this.planning().calendarSync!;
+    if (!calendarSync.installationId) calendarSync.installationId = randomUUID();
+    this.googleOAuth = new GoogleOAuthClient({
+      loadCredentials: async () => this.persistence.loadGoogleCalendarCredentials(),
+      saveCredentials: async credentials => this.persistence.saveGoogleCalendarCredentials(credentials),
+      clearCredentials: async () => this.persistence.clearGoogleCalendarCredentials(),
+      openExternal: url => shell.openExternal(url),
+    });
+    const savedGoogle = this.persistence.loadGoogleCalendarCredentials();
+    if (savedGoogle?.clientId) await this.googleOAuth.configureClient({ installed: { client_id: savedGoogle.clientId, ...(savedGoogle.clientSecret ? { client_secret: savedGoogle.clientSecret } : {}) } });
+    calendarSync.googleConfigured = Boolean(savedGoogle?.clientId);
+    calendarSync.googleConnected = Boolean(savedGoogle?.refreshToken);
+    this.persist();
     this.token = this.persistence.loadToken("notion");
     if (this.token) {
       this.services.set("notion", new NotionService(this.token) as unknown as Service);
@@ -383,8 +410,8 @@ export class DesktopRuntime {
     }
     this.registerIpc();
     this.createWindow();
+    this.refreshTimer = setInterval(() => { void this.refresh(); void this.refreshLiveCalendars().catch(() => undefined); }, 60_000);
     this.createTray();
-    this.refreshTimer = setInterval(() => void this.refresh(), 60_000);
     for (const provider of this.services.keys()) void this.startupConnection(provider);
   }
 
@@ -444,7 +471,18 @@ export class DesktopRuntime {
     ipcMain.handle("desktop:planning-settings", guarded((settings) => this.setPlanningSettings(settings)));
     ipcMain.handle("desktop:calendar-import", guarded((ics) => this.importCalendar(ics)));
     ipcMain.handle("desktop:calendar-add-event", guarded((event) => this.addCalendarEvent(event)));
-    ipcMain.handle("desktop:plan-generate", guarded(() => generatePlan(this.planning(), this.state)));
+    ipcMain.handle("desktop:calendar-google-configure", guarded((json) => this.configureGoogleCalendar(json)));
+    ipcMain.handle("desktop:calendar-google-connect", guarded(() => this.connectGoogleCalendar()));
+    ipcMain.handle("desktop:calendar-google-cancel", guarded(() => this.cancelGoogleCalendarConnection()));
+    ipcMain.handle("desktop:calendar-google-disconnect", guarded(() => this.disconnectGoogleCalendar()));
+    ipcMain.handle("desktop:calendar-google-list", guarded(() => this.listGoogleCalendars()));
+    ipcMain.handle("desktop:calendar-notion-resolve", guarded((url) => this.resolveNotionCalendar(url)));
+    ipcMain.handle("desktop:calendar-notion-add", guarded((calendar) => this.addNotionCalendar(calendar)));
+    ipcMain.handle("desktop:calendar-selection", guarded((selected, destination) => this.updateCalendarSelection(selected, destination)));
+    ipcMain.handle("desktop:calendar-refresh", guarded(() => this.refreshLiveCalendars()));
+    ipcMain.handle("desktop:calendar-recovery-candidates", guarded((id,index) => this.getCalendarRecoveryCandidates(id,index)));
+    ipcMain.handle("desktop:calendar-reconcile-operation", guarded((id,index,resolution) => this.reconcileCalendarOperation(id,index,resolution)));
+    ipcMain.handle("desktop:plan-generate", guarded(() => this.generatePlanning()));
     ipcMain.handle("desktop:plan-approve", guarded((proposal, selected) => this.approvePlanning(proposal, selected)));
     ipcMain.handle("desktop:calendar-export", guarded(() => exportApprovedICS(this.planning().blocks, this.state)));
     ipcMain.handle(CHANNELS.openNotion, guarded((id) => this.openNotion(id)));
@@ -518,15 +556,263 @@ export class DesktopRuntime {
   }
   private importCalendar(value: unknown): AppState {
     if(typeof value!=="string"||value.length>5_000_000)throw new TypeError("Calendar file is invalid or too large.");const current=this.planning();const parsed=parseCalendarICS(value,current.settings.timezone);
-    this.state.planning={...current,events:parsed.events,calendarImportedAt:parsed.importedAt,calendarSource:"ics",settings:{...current.settings,allowEmptyCalendar:false},inputRevision:current.inputRevision+1};this.persist();this.broadcast();return this.snapshot();
+    this.state.planning={...current,events:[...parsed.events,...current.events.filter(event=>event.id.startsWith("manual-"))],calendarImportedAt:parsed.importedAt,calendarSource:"ics",calendarSync:{...current.calendarSync!,mode:"local",error:null},settings:{...current.settings,allowEmptyCalendar:false},inputRevision:current.inputRevision+1};this.persist();this.broadcast();return this.snapshot();
+  }
+
+  private async configureGoogleCalendar(value: unknown): Promise<AppState> {
+    if (typeof value !== "string" || value.length > 100_000) throw new TypeError("Google desktop client JSON is invalid or too large.");
+    if (!this.googleOAuth) throw new Error("Google Calendar is unavailable.");
+    let parsed: unknown;try{parsed=JSON.parse(value);}catch{throw new TypeError("Google desktop client JSON is invalid.");}
+    await this.googleOAuth.configureClient(parsed);
+    const sync=this.planning().calendarSync!;const oldGoogleKeys=new Set(sync.calendars.filter(calendar=>calendar.provider==="google").map(calendarKey));
+    sync.calendars=sync.calendars.filter(calendar=>calendar.provider!=="google");sync.selectedKeys=sync.selectedKeys.filter(key=>!oldGoogleKeys.has(key));if(sync.defaultDestinationKey&&oldGoogleKeys.has(sync.defaultDestinationKey))sync.defaultDestinationKey=null;
+    sync.googleConfigured = true;sync.googleConnected=false;sync.error=null;sync.mode=sync.selectedKeys.length?"live":"local";
+    this.state.planning={...this.planning(),events:this.planning().events.filter(event=>event.remote?.provider!=="google"),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
+    this.persist(); this.broadcast(); return this.snapshot();
+  }
+
+  private async connectGoogleCalendar(): Promise<AppState> {
+    if (!this.googleOAuth) throw new Error("Google Calendar is unavailable.");
+    await this.googleOAuth.connect();
+    this.planning().calendarSync!.googleConnected = true;
+    this.googleCalendar = new GoogleCalendarClient({ getAccessToken: () => this.googleOAuth!.getAccessToken() });
+    const sync=this.planning().calendarSync!;const oldGoogle=sync.calendars.filter(calendar=>calendar.provider==="google");const listed=await this.googleCalendar.listCalendars();
+    const accountChanged=oldGoogle.some(old=>listed.some(next=>next.id===old.id&&next.accountId!==old.accountId));
+    if(accountChanged){const oldKeys=new Set(oldGoogle.map(calendarKey));sync.selectedKeys=sync.selectedKeys.filter(key=>!oldKeys.has(key));if(sync.defaultDestinationKey&&oldKeys.has(sync.defaultDestinationKey))sync.defaultDestinationKey=null;}
+    const available=new Set(listed.map(calendarKey));sync.selectedKeys=sync.selectedKeys.filter(key=>!oldGoogle.some(calendar=>calendarKey(calendar)===key)||available.has(key));
+    sync.calendars=[...sync.calendars.filter(calendar=>calendar.provider!=="google"),...listed];sync.error=null;
+    const liveGoogleIds=new Set(listed.map(calendar=>calendar.id));this.state.planning={...this.planning(),events:this.planning().events.filter(event=>event.remote?.provider!=="google"||liveGoogleIds.has(event.remote.calendarId)),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
+    this.persist(); this.broadcast(); return this.snapshot();
+  }
+
+  private cancelGoogleCalendarConnection(): void { this.googleOAuth?.cancelConnection(); }
+
+  private async disconnectGoogleCalendar(): Promise<AppState> {
+    this.googleOAuth?.cancelConnection();
+    await this.googleOAuth?.disconnect(); this.googleCalendar = null;
+    const sync = this.planning().calendarSync!;
+    const remove = new Set(sync.calendars.filter(c => c.provider === "google").map(calendarKey));
+    sync.calendars = sync.calendars.filter(c => c.provider !== "google"); sync.selectedKeys = sync.selectedKeys.filter(key => !remove.has(key));
+    if (sync.defaultDestinationKey && remove.has(sync.defaultDestinationKey)) sync.defaultDestinationKey = null;
+    sync.googleConnected = false;
+    sync.mode=sync.selectedKeys.length?"live":"local";sync.error=null;this.state.planning={...this.planning(),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
+    this.state.planning={...this.planning(),events:this.planning().events.filter(event=>event.remote?.provider!=="google")};this.persist(); this.broadcast(); return this.snapshot();
+  }
+
+  private async listGoogleCalendars(): Promise<CalendarDefinition[]> {
+    if (!this.googleCalendar) throw new Error("Connect Google Calendar first.");
+    const listed = await this.googleCalendar.listCalendars();
+    const sync=this.planning().calendarSync!;const oldGoogle=sync.calendars.filter(calendar=>calendar.provider==="google");const changed=JSON.stringify(oldGoogle)!==JSON.stringify(listed);const accountChanged=oldGoogle.some(old=>listed.some(next=>next.id===old.id&&next.accountId!==old.accountId));
+    const available=new Set(listed.map(calendarKey));sync.selectedKeys=sync.selectedKeys.filter(key=>!(accountChanged&&oldGoogle.some(calendar=>calendarKey(calendar)===key))&&(!oldGoogle.some(calendar=>calendarKey(calendar)===key)||available.has(key)));if(sync.defaultDestinationKey&&oldGoogle.some(calendar=>calendarKey(calendar)===sync.defaultDestinationKey)&&(!available.has(sync.defaultDestinationKey)||accountChanged))sync.defaultDestinationKey=null;
+    sync.calendars=[...sync.calendars.filter(c=>c.provider!=="google"),...listed];
+    if(changed){const ids=new Set(listed.map(calendar=>calendar.id));this.state.planning={...this.planning(),events:this.planning().events.filter(event=>event.remote?.provider!=="google"||ids.has(event.remote.calendarId)),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();}
+    this.persist(); this.broadcast(); return listed;
+  }
+
+  private async resolveNotionCalendar(value: unknown): Promise<SourceCandidate[]> { return this.resolveSource(value); }
+
+  private async addNotionCalendar(value: unknown): Promise<AppState> {
+    if (!isRecord(value) || value.provider !== "notion" || typeof value.id !== "string" || typeof value.name !== "string" || typeof value.timeZone !== "string" || !isRecord(value.mapping) || typeof value.mapping.title !== "string" || typeof value.mapping.date !== "string") throw new TypeError("Choose a Notion calendar database and title and date properties.");
+    const mapping = value.mapping as { title: string; date: string };
+    if (!DateTime.now().setZone(value.timeZone).isValid) throw new TypeError("Choose a valid IANA timezone for this Notion calendar.");
+    const service = this.services.get("notion"); if (!service || !this.tokens.get("notion")) throw new Error("Connect Notion first.");
+    const candidate = sourceCandidate(await service.inspectSource(value.id));
+    const candidateProperties = candidate.properties;
+    const title = candidateProperties.find(p => p.id === mapping.title && p.type === "title");
+    const date = candidateProperties.find(p => p.id === mapping.date && p.type === "date");
+    if (!title || !date) throw new Error("Choose an existing Notion title property and date property.");
+    const calendar: CalendarDefinition = { provider: "notion", id: value.id, name: value.name, timeZone: value.timeZone, canRead: true, canWrite: true, accountId: notionAccountId(this.tokens.get("notion") || ""), mapping: { title: title.id, date: date.id } };
+    const sync = this.planning().calendarSync!;const existing=sync.calendars.find(c=>c.provider==="notion"&&c.id===calendar.id);
+    if(existing&&(existing.mapping?.title!==calendar.mapping?.title||existing.mapping?.date!==calendar.mapping?.date)&&(this.planning().blocks.some(block=>block.remote?.provider==="notion"&&block.remote.calendarId===calendar.id)||sync.journal.some(operation=>operation.steps.some(step=>step.calendarKey===calendarKey(existing)&&step.status!=="complete"&&step.status!=="absent-confirmed"))))throw new Error("This Notion calendar mapping is used by an approved block or pending change. Keep the existing title/date properties for it.");
+    const changed=JSON.stringify(existing)!==JSON.stringify(calendar);sync.calendars = [...sync.calendars.filter(c => calendarKey(c) !== calendarKey(calendar)), calendar];
+    if(changed){this.state.planning={...this.planning(),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();}
+    this.notionCalendar = new NotionCalendarClient({ getToken: () => { const token = this.tokens.get("notion"); if (!token) throw new Error("Connect Notion first."); return token; } });
+    this.persist(); this.broadcast(); return this.snapshot();
+  }
+
+  private updateCalendarSelection(selectedValue: unknown, destinationValue: unknown): AppState {
+    if (!Array.isArray(selectedValue) || selectedValue.some(key => typeof key !== "string") || (destinationValue !== null && typeof destinationValue !== "string")) throw new TypeError("Calendar selection is invalid.");
+    const sync = this.planning().calendarSync!; const wasLive=sync.mode==="live"; const byKey = new Map(sync.calendars.map(calendar => [calendarKey(calendar), calendar]));
+    const selected = [...new Set(selectedValue as string[])];
+    if (selected.some(key => !byKey.get(key)?.canRead)) throw new Error("Select calendars with event read access.");
+    const destination = destinationValue === null ? null : byKey.get(destinationValue as string);
+    if (destinationValue !== null && (!destination || !destination.canWrite)) throw new Error("Choose a writable calendar as the default destination.");
+    if (destination && !selected.includes(calendarKey(destination))) selected.push(calendarKey(destination));
+    sync.selectedKeys = selected; sync.defaultDestinationKey = destination ? calendarKey(destination) : null; sync.mode = selected.length ? "live" : "local"; sync.error = null;
+    const current=this.planning(); const events=sync.mode==="local"&&wasLive?current.events.filter(event=>event.id.startsWith("manual-")):current.events;
+    this.state.planning = { ...current, events, ...(sync.mode==="local"&&wasLive?{calendarImportedAt:null,calendarSource:null}:{}), calendarSync: sync, inputRevision: current.inputRevision + 1 };
+    this.planAuthority.clear();
+    this.persist(); this.broadcast(); return this.snapshot();
+  }
+
+  private async refreshLiveCalendars(allowDuringApproval = false): Promise<AppState> {
+    if(this.approvalActive&&!allowDuringApproval)return this.snapshot();
+    if (this.calendarRefreshInFlight) return this.calendarRefreshInFlight;
+    const planning = this.planning(); const sync = planning.calendarSync!;
+    if (sync.mode !== "live") return this.snapshot();
+    const capturedRevision=planning.inputRevision;
+    const capturedSelection=JSON.stringify([sync.calendars,sync.selectedKeys,sync.defaultDestinationKey,sync.mode]);
+    this.calendarRefreshInFlight = (async () => {
+      try {
+        if (this.tokens.has("notion") && sync.calendars.some(c => c.provider === "notion" && (sync.selectedKeys.includes(calendarKey(c)) || sync.defaultDestinationKey === calendarKey(c)))) this.notionCalendar ??= new NotionCalendarClient({ getToken: () => this.tokens.get("notion") || "" });
+        if (this.googleOAuth && sync.calendars.some(c => c.provider === "google" && (sync.selectedKeys.includes(calendarKey(c)) || sync.defaultDestinationKey === calendarKey(c)))) this.googleCalendar ??= new GoogleCalendarClient({ getAccessToken: () => this.googleOAuth!.getAccessToken() });
+        const now = DateTime.now().setZone(planning.settings.timezone); const range = { start: now.startOf("day").toUTC().toISO()!, end: now.startOf("day").plus({ days: 7 }).toUTC().toISO()! };
+        const result = await refreshCalendarSnapshot(planning, { ...(this.googleCalendar ? { google: this.googleCalendar } : {}), ...(this.notionCalendar ? { notion: this.notionCalendar } : {}) }, range);
+        const latest=this.planning();
+        if(latest!==planning||latest.inputRevision!==capturedRevision||JSON.stringify([latest.calendarSync?.calendars,latest.calendarSync?.selectedKeys,latest.calendarSync?.defaultDestinationKey,latest.calendarSync?.mode])!==capturedSelection){
+          latest.calendarSync={...latest.calendarSync!,error:"Planning settings changed during calendar refresh. Refresh calendars again before planning."};this.state.planning=latest;this.persist();this.broadcast();throw new Error(latest.calendarSync.error!);
+        }
+        this.state.planning = result.planning; this.persist(); this.broadcast(); return this.snapshot();
+      } catch (error) {
+        const current = this.planning(); current.calendarSync = { ...current.calendarSync!, error: toError(error).message };
+        this.state.planning = current; this.persist(); this.broadcast(); throw error;
+      } finally { this.calendarRefreshInFlight = null; }
+    })();
+    return this.calendarRefreshInFlight;
+  }
+
+  private async generatePlanning(): Promise<PlanProposal> {
+    if(this.approvalActive)throw new Error("Wait for the calendar approval to finish before generating another plan.");
+    this.assertNoUnresolvedCalendarCreate();
+    if (this.planning().calendarSync?.mode === "live") await this.refreshLiveCalendars();
+    this.assertNoUnresolvedCalendarCreate();
+    const proposal = generatePlan(this.planning(), this.state); this.planAuthority.clear(); this.planAuthority.set(proposal.id, clone(proposal)); return proposal;
   }
   private addCalendarEvent(value: unknown): AppState {
     if(!isRecord(value)||typeof value.title!=="string"||!value.title.trim()||typeof value.start!=="string"||typeof value.end!=="string")throw new TypeError("Calendar event is invalid.");const start=DateTime.fromISO(value.start),end=DateTime.fromISO(value.end);if(!start.isValid||!end.isValid||end<=start)throw new TypeError("Calendar event needs a valid end after its start.");const current=this.planning();
     this.state.planning={...current,events:[...current.events,{id:`manual-${Date.now()}`,title:value.title.trim(),start:start.toUTC().toISO()!,end:end.toUTC().toISO()!}],calendarImportedAt:current.calendarImportedAt??new Date().toISOString(),calendarSource:current.calendarSource??"manual",inputRevision:current.inputRevision+1};this.persist();this.broadcast();return this.snapshot();
   }
-  private approvePlanning(proposalValue: unknown, selectedValue: unknown): AppState {
-    if(!isRecord(proposalValue)||typeof proposalValue.id!=="string"||!Array.isArray(proposalValue.items)||!Number.isInteger(proposalValue.inputRevision)||!Array.isArray(selectedValue)||selectedValue.some(x=>typeof x!=="string"))throw new TypeError("Plan approval is invalid.");
-    this.state.planning=approvePlan(this.planning(),this.state,proposalValue as unknown as PlanProposal,selectedValue as string[]);this.persist();this.broadcast();return this.snapshot();
+  private async approvePlanning(proposalValue: unknown, selectedValue: unknown): Promise<AppState> {
+    if (this.approvalActive) throw new Error("Another calendar approval is still being saved. Wait for it to finish.");
+    this.approvalActive = true;
+    try { return await this.performPlanningApproval(proposalValue, selectedValue); }
+    finally { this.approvalActive = false; }
+  }
+
+  private async performPlanningApproval(proposalValue: unknown, selectedValue: unknown): Promise<AppState> {
+    if(!isRecord(proposalValue)||typeof proposalValue.id!=="string"||!Array.isArray(selectedValue)||selectedValue.some(x=>typeof x!=="string"))throw new TypeError("Plan approval is invalid.");
+    const proposal = this.planAuthority.get(proposalValue.id);
+    if (!proposal) throw new Error("This plan is no longer available. Generate a fresh review before approving.");
+    this.assertNoUnresolvedCalendarCreate();
+    if (this.planning().calendarSync?.mode === "live") await this.refreshLiveCalendars(true);
+    this.assertNoUnresolvedCalendarCreate();
+    const current = this.planning(); const now = DateTime.now().setZone(current.settings.timezone);
+    const fresh = generatePlan(current, this.state, DateTime.fromISO(proposal.generatedAt).setZone(current.settings.timezone));
+    const same = JSON.stringify([fresh.items.map(x=>[refKey(x.ref),x.start,x.end]),fresh.moves.map(x=>[x.blockId,x.start,x.end]),fresh.removals.map(x=>[x.blockId,x.reason])]) === JSON.stringify([proposal.items.map(x=>[refKey(x.ref),x.start,x.end]),proposal.moves.map(x=>[x.blockId,x.start,x.end]),proposal.removals.map(x=>[x.blockId,x.reason])]);
+    if (!same) throw new Error("Calendar availability changed. Generate a fresh review before approving.");
+    const desired = approvePlan(current, this.state, proposal, selectedValue as string[], now);
+    const sync = current.calendarSync!;
+    if (sync.mode !== "live") { this.state.planning = desired; this.persist(); this.broadcast(); this.planAuthority.delete(proposal.id); return this.snapshot(); }
+    const chosen = new Set(selectedValue as string[]);
+    const operationId = randomUUID();
+    const steps: NonNullable<typeof sync.journal>[number]["steps"] = [];
+    const destination = sync.calendars.find(calendar => calendarKey(calendar) === sync.defaultDestinationKey);
+    for (const item of proposal.items) {
+      if (!chosen.has(refKey(item.ref))) continue;
+      if (!destination?.canWrite) throw new Error("Choose a writable default destination before approving new task blocks.");
+      const block = desired.blocks.find(b => b.ref.taskId===item.ref.taskId&&b.ref.sourceId===item.ref.sourceId&&b.start===item.start&&b.end===item.end&&!current.blocks.some(old=>old.id===b.id));
+      if (!block) continue;
+      const task = this.state.tasks.find(t=>t.id===item.ref.taskId&&t.sourceId===item.ref.sourceId);
+      steps.push({ kind:"create", blockId:block.id, status:"pending", calendarKey:calendarKey(destination), taskRef:item.ref, title:task?.name||"Planned task", start:item.start, end:item.end });
+    }
+    for (const move of proposal.moves) if (move.start && chosen.has(`move:${move.blockId}`)) {
+      const block=current.blocks.find(b=>b.id===move.blockId); if (block?.remote) steps.push({kind:"update",blockId:block.id,status:"pending",remote:block.remote,title:this.state.tasks.find(t=>t.id===block.ref.taskId&&t.sourceId===block.ref.sourceId)?.name||"Planned task",start:move.start,end:move.end,expectedVersion:block.remote.version});
+    }
+    for (const removal of proposal.removals) if (chosen.has(`remove:${removal.blockId}`)) {
+      const block=current.blocks.find(b=>b.id===removal.blockId); if (block?.remote) steps.push({kind:"delete",blockId:block.id,status:"pending",remote:block.remote,expectedVersion:block.remote.version});
+    }
+    if (!steps.length) { this.state.planning=desired;this.persist();this.broadcast();this.planAuthority.delete(proposal.id);return this.snapshot(); }
+    const operation = { id: operationId, proposalId: proposal.id, status:"in-progress" as const, updatedAt:new Date().toISOString(), steps };
+    this.state.planning={...current,calendarSync:{...sync,journal:[...sync.journal,operation]}}; this.persist();
+    let next: PlanningData = { ...current, calendarSync:{...sync,journal:[...sync.journal,operation]} };
+    const clients = { google:this.googleCalendar, notion:this.notionCalendar };
+    for (let i=0;i<operation.steps.length;i++) {
+      let step=operation.steps[i];
+      this.updateCalendarOperation(operationId,i,{...step,status:"in-progress"});
+      try {
+        const binding=step.remote;
+        const calendar=step.calendarKey ? sync.calendars.find(c=>calendarKey(c)===step.calendarKey) : sync.calendars.find(c=>c.provider===binding?.provider&&c.id===binding.calendarId&&(c.accountId??c.id)===binding.accountId);
+        if (!calendar) throw new Error("The destination calendar is no longer available.");
+        const client=clients[calendar.provider]; if(!client)throw new Error("Reconnect the selected calendar before approving.");
+        const block=desired.blocks.find(b=>b.id===step.blockId)||current.blocks.find(b=>b.id===step.blockId);
+        if(!block)throw new Error("The approved task block could not be found.");
+        if(step.kind==="create") {
+          const event=await client.createEvent(calendar,{installationId:sync.installationId,blockId:block.id,operationId,title:step.title!,start:step.start!,end:step.end!,taskUrl:this.state.tasks.find(t=>t.id===block.ref.taskId&&t.sourceId===block.ref.sourceId)?.url});
+          const remote={provider:calendar.provider,accountId:calendar.accountId??calendar.id,calendarId:calendar.id,eventId:event.ref.id,version:event.version};
+          const latest=this.planning();const desiredBlock=desired.blocks.find(b=>b.id===block.id)!;next={...latest,blocks:[...latest.blocks.filter(b=>b.id!==block.id),{...desiredBlock,remote}]}; this.state.planning=next;
+          step={...step,status:"complete",remote}; this.updateCalendarOperation(operationId,i,step); next=this.planning(); this.persist(); this.broadcast();
+        } else if(step.kind==="update") {
+          const event=await client.updateEvent(calendar,binding!.eventId,{installationId:sync.installationId,blockId:block.id,operationId,title:step.title!,start:step.start!,end:step.end!,taskUrl:this.state.tasks.find(t=>t.id===block.ref.taskId&&t.sourceId===block.ref.sourceId)?.url},step.expectedVersion!);
+          const remote={...binding!,version:event.version}; const latest=this.planning();const desiredBlock=desired.blocks.find(b=>b.id===block.id)!; next={...latest,blocks:latest.blocks.map(b=>b.id===block.id?{...desiredBlock,remote}:b)}; this.state.planning=next;
+          step={...step,status:"complete",remote}; this.updateCalendarOperation(operationId,i,step); next=this.planning(); this.persist(); this.broadcast();
+        } else {
+          await client.deleteEvent(calendar,binding!.eventId,step.expectedVersion!);const latest=this.planning();next={...latest,blocks:latest.blocks.filter(b=>b.id!==block.id)};this.state.planning=next;
+          step={...step,status:"complete"}; this.updateCalendarOperation(operationId,i,step); next=this.planning(); this.persist(); this.broadcast();
+        }
+      } catch(error) {
+        const message=toError(error).message; const recovery=error instanceof CalendarProviderError && error.code==="unknown-write";
+        this.planAuthority.delete(proposal.id);
+        const uncertainCreate=step.kind==="create"&&recovery;
+        const failedStep={...step,status:recovery?"recovery-needed" as const:"absent-confirmed" as const,message:recovery?message:`Confirmed not created: ${message}`};
+        this.updateCalendarOperation(operationId,i,failedStep);
+        const journal=this.planning().calendarSync!.journal.map(x=>x.id===operationId?{...x,status:recovery?"recovery-needed" as const:"complete" as const,updatedAt:new Date().toISOString(),steps:x.steps.map((old,j)=>j>i&&old.status==="pending"?{...old,status:"absent-confirmed" as const,message:"This step was not attempted after the earlier result. Generate a fresh plan before trying again."}:old)}:x);
+        this.state.planning={...this.planning(),calendarSync:{...this.planning().calendarSync!,journal}};this.persist();this.broadcast();
+        throw new Error(recovery?`Calendar approval stopped after ${i} of ${steps.length} changes. Confirmed changes were saved. Review calendar recovery before approving again: ${message}`:`Calendar change was confirmed not created: ${message}. Generate a fresh plan before trying again.`);
+      }
+    }
+    const journal=this.planning().calendarSync!.journal.map(x=>x.id===operationId?{...x,status:"complete" as const,updatedAt:new Date().toISOString()}:x);
+    const latest=this.planning();const confirmedById=new Map(latest.blocks.map(block=>[block.id,block]));
+    const completed:PlanningData={...latest,blocks:desired.blocks.map(block=>confirmedById.get(block.id)?.remote?{...block,remote:confirmedById.get(block.id)!.remote}:block),calendarSync:{...latest.calendarSync!,journal}};
+    this.state.planning=completed;this.persist();this.broadcast();this.planAuthority.delete(proposal.id);return this.snapshot();
+  }
+
+  private updateCalendarOperation(operationId: string, index: number, step: NonNullable<PlanningData["calendarSync"]>["journal"][number]["steps"][number]): void {
+    const sync=this.planning().calendarSync!;
+    this.state.planning={...this.planning(),calendarSync:{...sync,journal:sync.journal.map(operation=>operation.id===operationId?{...operation,updatedAt:new Date().toISOString(),steps:operation.steps.map((old,i)=>i===index?step:old)}:operation)}};
+    this.persist();
+  }
+
+  private assertNoUnresolvedCalendarCreate(): void {
+    if(this.planning().calendarSync?.mode!=="live")return;
+    const pending=this.planning().calendarSync?.journal.some(operation=>operation.steps.some(step=>step.kind==="create"&&(step.status==="recovery-needed"||step.status==="in-progress")));
+    if(pending)throw new Error("Resolve the uncertain calendar event creation before generating or approving another live plan.");
+  }
+
+  private async getCalendarRecoveryCandidates(operationValue: unknown, indexValue: unknown): Promise<{ id:string;title:string;start:string;end:string }[]> {
+    const operationId=stringValue(operationValue,"operationId");if(!Number.isInteger(indexValue))throw new TypeError("Recovery step is invalid.");
+    const operation=this.planning().calendarSync?.journal.find(item=>item.id===operationId);const step=operation?.steps[indexValue as number];
+    if(!operation||!step||step.kind!=="create"||step.status!=="recovery-needed"||!step.calendarKey||!step.start||!step.end)throw new Error("This calendar operation does not need create recovery.");
+    const sync=this.planning().calendarSync!;const calendar=sync.calendars.find(item=>calendarKey(item)===step.calendarKey);if(!calendar)throw new Error("The target calendar is no longer available.");
+    if(calendar.provider==="google"&&this.googleOAuth&&sync.googleConnected)this.googleCalendar??=new GoogleCalendarClient({getAccessToken:()=>this.googleOAuth!.getAccessToken()});
+    if(calendar.provider==="notion"&&this.tokens.has("notion"))this.notionCalendar??=new NotionCalendarClient({getToken:()=>this.tokens.get("notion")||""});
+    const client=calendar.provider==="google"?this.googleCalendar:this.notionCalendar;if(!client)throw new Error("Reconnect the target calendar before checking recovery.");
+    const start=DateTime.fromISO(step.start).minus({days:1}).toUTC().toISO()!,end=DateTime.fromISO(step.end).plus({days:1}).toUTC().toISO()!;
+    const events=await client.readEvents(calendar,{start,end});
+    return events.filter(event=>event.ownership?.installationId===sync.installationId&&event.ownership?.blockId===step.blockId&&event.ownership?.operationId===operationId).map(event=>({id:event.ref.id,title:event.title,start:event.start,end:event.end}));
+  }
+
+  private async reconcileCalendarOperation(operationValue: unknown,indexValue: unknown,resolutionValue: unknown): Promise<AppState> {
+    const operationId=stringValue(operationValue,"operationId");if(!Number.isInteger(indexValue)||!isRecord(resolutionValue))throw new TypeError("Recovery choice is invalid.");
+    const index=indexValue as number;const sync=this.planning().calendarSync!;const operation=sync.journal.find(item=>item.id===operationId);const step=operation?.steps[index];
+    if(!operation||!step||step.kind!=="create"||step.status!=="recovery-needed"||!step.calendarKey||!step.start||!step.end||!step.taskRef)throw new Error("This calendar operation does not need create recovery.");
+    const calendar=sync.calendars.find(item=>calendarKey(item)===step.calendarKey);if(!calendar)throw new Error("The target calendar is no longer available.");
+    if(calendar.provider==="google"&&this.googleOAuth&&sync.googleConnected)this.googleCalendar??=new GoogleCalendarClient({getAccessToken:()=>this.googleOAuth!.getAccessToken()});
+    if(calendar.provider==="notion"&&this.tokens.has("notion"))this.notionCalendar??=new NotionCalendarClient({getToken:()=>this.tokens.get("notion")||""});
+    const client=calendar.provider==="google"?this.googleCalendar:this.notionCalendar;if(!client)throw new Error("Reconnect the target calendar before checking recovery.");
+    let updatedStep=step;
+    if(resolutionValue.kind==="existing-event"){
+      const eventId=stringValue(resolutionValue.eventId,"eventId");const event=await client.getEvent(calendar,eventId);
+      if(!event||event.ownership?.installationId!==sync.installationId||event.ownership?.blockId!==step.blockId||event.ownership?.operationId!==operationId)throw new Error("That event does not carry the matching pending task marker. Choose a matching event or confirm that no event exists.");
+      const remote={provider:calendar.provider,accountId:calendar.accountId??calendar.id,calendarId:calendar.id,eventId:event.ref.id,version:event.version};
+      const block={id:step.blockId,ref:step.taskRef,start:event.start,end:event.end,approvedAt:new Date().toISOString(),remote};
+      this.state.planning={...this.planning(),blocks:[...this.planning().blocks.filter(item=>item.id!==block.id),block]};
+      updatedStep={...step,status:"complete",remote,message:undefined};
+    } else if(resolutionValue.kind==="confirm-absent") updatedStep={...step,status:"absent-confirmed",message:"User confirmed that no matching remote event exists. Generate a fresh plan before trying again."};
+    else throw new TypeError("Choose the matching existing event or confirm it is absent.");
+    const steps=operation.steps.map((item,i)=>i===index?updatedStep:item.status==="pending"?{...item,status:"absent-confirmed" as const,message:"This step was not attempted after the earlier uncertain result. Generate a fresh plan before trying again."}:item);const complete=steps.every(item=>item.status==="complete"||item.status==="absent-confirmed");
+    const nextOperation={...operation,steps,status:complete?"complete" as const:"recovery-needed" as const,updatedAt:new Date().toISOString()};
+    this.state.planning={...this.planning(),calendarSync:{...this.planning().calendarSync!,journal:this.planning().calendarSync!.journal.map(item=>item.id===operationId?nextOperation:item)}};
+    this.persist();this.broadcast();return this.snapshot();
   }
 
   private broadcast(): void {
@@ -567,7 +853,7 @@ export class DesktopRuntime {
     });
     this.mainWindow.on("focus", () => {
       if (this.focusTimer) clearTimeout(this.focusTimer);
-      this.focusTimer = setTimeout(() => void this.refresh(), 150);
+      this.focusTimer = setTimeout(() => { void this.refresh(); void this.refreshLiveCalendars().catch(() => undefined); }, 150);
     });
     const rememberBounds = () => {
       if (this.resizeTimer) clearTimeout(this.resizeTimer);
@@ -711,6 +997,10 @@ export class DesktopRuntime {
     const token = config.token;
     const service = new NotionService(token) as unknown as Service;
     await service.validate();
+    const nextAccount=notionAccountId(token);const planning=this.planning();const sync=planning.calendarSync!;const oldNotion=sync.calendars.filter(calendar=>calendar.provider==="notion");
+    if(oldNotion.some(calendar=>calendar.accountId!==nextAccount)){
+      const oldKeys=new Set(oldNotion.map(calendarKey));sync.calendars=sync.calendars.filter(calendar=>calendar.provider!=="notion");sync.selectedKeys=sync.selectedKeys.filter(key=>!oldKeys.has(key));if(sync.defaultDestinationKey&&oldKeys.has(sync.defaultDestinationKey))sync.defaultDestinationKey=null;sync.mode=sync.selectedKeys.length?"live":"local";sync.error="Notion account changed. Add its event databases again before using live calendar sync.";this.state.planning={...planning,events:planning.events.filter(event=>event.remote?.provider!=="notion"),calendarSync:sync,inputRevision:planning.inputRevision+1};this.planAuthority.clear();
+    }
     this.persistence.saveToken(token, "notion");
     this.token = token;
     this.service = service;
@@ -720,6 +1010,7 @@ export class DesktopRuntime {
     this.state.connected = true;
     this.state.connections = { ...this.state.connections, notion: { connected: true } };
     this.state.sync.errors = {};
+    this.planAuthority.clear();
     this.broadcast();
     await this.sync();
     return this.snapshot();
@@ -743,6 +1034,7 @@ export class DesktopRuntime {
       this.persistence.clearPlaneConfig();
     }
     if (provider === "notion") {
+      this.planAuthority.clear();
       this.token = null;
       this.service = this.services.get("notion") || null;
     }

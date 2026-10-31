@@ -4,6 +4,7 @@ import { safeStorage } from "electron";
 import { cleanTaskOwners } from "../shared/types";
 import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type SourceProvider, type Task, type ThemePreference } from "../shared/types";
 import { cleanPlanning, DEFAULT_PLANNING } from "./planning";
+import type { GoogleOAuthCredentials } from "./google-calendar";
 
 export interface PersistedData {
   sources: SourceConfig[];
@@ -141,12 +142,14 @@ export class AppPersistence {
   private readonly tokenPath: string;
   private readonly planeTokenPath: string;
   private readonly planeConfigPath: string;
+  private readonly googleCalendarCredentialsPath: string;
 
   constructor(private readonly directory: string) {
     this.statePath = path.join(directory, "state.json");
     this.tokenPath = path.join(directory, "notion-token.enc");
     this.planeTokenPath = path.join(directory, "plane-token.enc");
     this.planeConfigPath = path.join(directory, "plane-config.json");
+    this.googleCalendarCredentialsPath = path.join(directory, "google-calendar-credentials.enc");
   }
 
   load(): PersistedData {
@@ -239,6 +242,29 @@ export class AppPersistence {
       const code = isRecord(error) ? error.code : undefined;
       if (code !== "ENOENT") throw error;
     }
+  }
+
+  loadGoogleCalendarCredentials(): GoogleOAuthCredentials | null {
+    try {
+      if (!safeStorage.isEncryptionAvailable()) return null;
+      const value = JSON.parse(safeStorage.decryptString(fs.readFileSync(this.googleCalendarCredentialsPath))) as unknown;
+      if (!isRecord(value) || typeof value.clientId !== "string") return null;
+      return value as unknown as GoogleOAuthCredentials;
+    } catch { return null; }
+  }
+
+  saveGoogleCalendarCredentials(credentials: GoogleOAuthCredentials): void {
+    if (!safeStorage.isEncryptionAvailable()) throw new Error("Secure credential storage is unavailable on this device.");
+    fs.mkdirSync(this.directory, { recursive: true });
+    const encrypted = safeStorage.encryptString(JSON.stringify(credentials));
+    const temporaryPath = `${this.googleCalendarCredentialsPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryPath, encrypted, { mode: 0o600 });
+    fs.renameSync(temporaryPath, this.googleCalendarCredentialsPath);
+  }
+
+  clearGoogleCalendarCredentials(): void {
+    try { fs.unlinkSync(this.googleCalendarCredentialsPath); }
+    catch (error) { const code = isRecord(error) ? error.code : undefined; if (code !== "ENOENT") throw error; }
   }
 }
 

@@ -19,13 +19,34 @@ export function cleanTaskOwners(value: unknown): TaskOwner[] {
 export interface Task { id: string; sourceId: string; name: string; url: string; due: TaskDate; status: string; completed: boolean; lastEdited: string; owners?: TaskOwner[] }
 export interface TaskRef { provider: SourceProvider; sourceId: string; taskId: string }
 export interface TaskPlanning { ref: TaskRef; estimateMinutes: number | null; parent: TaskRef | null; stepOrder: number; selected: boolean }
-export interface CalendarEvent { id: string; title: string; start: string; end: string; allDay?: boolean }
-export interface OwnedBlock { id: string; ref: TaskRef; start: string; end: string; approvedAt: string }
+export interface CalendarEvent { id: string; title: string; start: string; end: string; allDay?: boolean; remote?: OwnedCalendarEventRef; ownership?: import("./calendar").CalendarOwnership }
+import type { CalendarDefinition, CalendarProvider } from "./calendar";
+export interface OwnedCalendarEventRef { provider: CalendarProvider; accountId: string; calendarId: string; eventId: string; version: string }
+export interface OwnedBlock { id: string; ref: TaskRef; start: string; end: string; approvedAt: string; remote?: OwnedCalendarEventRef }
+export interface CalendarSyncState {
+  calendars: CalendarDefinition[];
+  selectedKeys: string[];
+  defaultDestinationKey: string | null;
+  lastSyncedAt: string | null;
+  error: string | null;
+  mode: "local" | "live";
+  googleConnected: boolean;
+  googleConfigured: boolean;
+  installationId: string;
+  journal: CalendarOperation[];
+}
+export interface CalendarOperation {
+  id: string;
+  proposalId: string;
+  status: "in-progress" | "complete" | "recovery-needed";
+  updatedAt: string;
+  steps: { kind: "create" | "update" | "delete"; blockId: string; status: "pending" | "in-progress" | "complete" | "recovery-needed" | "absent-confirmed"; remote?: OwnedCalendarEventRef; calendarKey?: string; taskRef?: TaskRef; title?: string; start?: string; end?: string; expectedVersion?: string; message?: string }[];
+}
 export interface PlanningSettings { timezone: string; workdays: number[]; startHour: number; endHour: number; allowEmptyCalendar: boolean }
 export interface BreakdownStep { name: string; estimateMinutes: number; order: number }
 export type BreakdownStepStatus = 'pending' | 'creating' | 'created' | 'failed' | 'recovery-needed';
 export interface BreakdownOperation { id: string; parent: TaskRef; steps: (BreakdownStep & { status: BreakdownStepStatus; ref?: TaskRef; message?: string })[]; status: 'in-progress' | 'complete' | 'recovery-needed'; updatedAt: string }
-export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[] }
+export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[]; calendarSync?: CalendarSyncState }
 export interface PlanProposal { id: string; inputRevision: number; generatedAt: string; expiresAt: string; items: { ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; moves: { blockId: string; ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; removals: { blockId: string; ref: TaskRef; reason: string }[]; unscheduled: { ref: TaskRef; reason: string; minutes: number | null }[]; capacityMinutes: number; allocatedMinutes: number }
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
 export interface SourceCandidate { id: string; databaseId: string; name: string; properties: PropertyInfo[]; provider?: SourceProvider; workspaceSlug?: string; projectId?: string; baseUrl?: string }
@@ -68,6 +89,17 @@ export interface DesktopAPI {
   reconcileBreakdownStep(operationId: string, order: number, resolution: { kind: 'existing-task'; ref: TaskRef } | { kind: 'confirm-not-created' }): Promise<AppState>;
   updatePlanningSettings(settings: Partial<PlanningSettings>): Promise<AppState>;
   importCalendar(ics: string): Promise<AppState>;
+  configureGoogleCalendar(clientJson: string): Promise<AppState>;
+  connectGoogleCalendar(): Promise<AppState>;
+  cancelGoogleCalendarConnection(): Promise<void>;
+  disconnectGoogleCalendar(): Promise<AppState>;
+  listGoogleCalendars(): Promise<CalendarDefinition[]>;
+  resolveNotionCalendar(url: string): Promise<SourceCandidate[]>;
+  addNotionCalendar(calendar: CalendarDefinition): Promise<AppState>;
+  updateCalendarSelection(selectedKeys: string[], defaultDestinationKey: string | null): Promise<AppState>;
+  refreshCalendars(): Promise<AppState>;
+  getCalendarRecoveryCandidates(operationId: string, stepIndex: number): Promise<{ id: string; title: string; start: string; end: string }[]>;
+  reconcileCalendarOperation(operationId: string, stepIndex: number, resolution: { kind: "existing-event"; eventId: string } | { kind: "confirm-absent" }): Promise<AppState>;
   addCalendarEvent(event: Omit<CalendarEvent, 'id'>): Promise<AppState>;
   generatePlan(): Promise<PlanProposal>;
   approvePlan(proposal: PlanProposal, selected: string[]): Promise<AppState>;

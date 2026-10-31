@@ -6,6 +6,7 @@ export const PLAN_REVIEW_BUFFER_MINUTES = 5;
 export const PLAN_REVIEW_TTL_MINUTES = 30;
 export const DEFAULT_PLANNING: PlanningData = {
   tasks: [], events: [], calendarImportedAt: null, calendarSource: null, operations: [],
+  calendarSync: { calendars: [], selectedKeys: [], defaultDestinationKey: null, lastSyncedAt: null, error: null, mode: "local", googleConnected: false, googleConfigured: false, installationId: "", journal: [] },
   settings: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", workdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17, allowEmptyCalendar: false },
   blocks: [], inputRevision: 0,
 };
@@ -13,11 +14,11 @@ export function refKey(ref: TaskRef): string { return JSON.stringify([ref.provid
 export function providerFor(sourceId: string, state: AppState): SourceProvider { return state.sources.find(s => s.id === sourceId)?.provider === "plane" ? "plane" : "notion"; }
 function taskRef(task: Task, state: AppState): TaskRef { return { provider: providerFor(task.sourceId, state), sourceId: task.sourceId, taskId: task.id }; }
 function mins(start: string, end: string): number { return Math.max(0, Math.round(DateTime.fromISO(end).diff(DateTime.fromISO(start), "minutes").minutes)); }
-function conflictSeverity(blocks: OwnedBlock[], events: CalendarEvent[], now: DateTime): Map<string, number> {
+function conflictSeverity(blocks: OwnedBlock[], events: CalendarEvent[], now: DateTime, installationId = "", live = false): Map<string, number> {
   const active=blocks.filter(b=>DateTime.fromISO(b.end).toUTC()>now.toUTC());const conflicts=new Map<string,number>();
   const overlap=(a:OwnedBlock,b:OwnedBlock)=>Interval.fromDateTimes(DateTime.fromISO(a.start).toUTC(),DateTime.fromISO(a.end).toUTC()).intersection(Interval.fromDateTimes(DateTime.fromISO(b.start).toUTC(),DateTime.fromISO(b.end).toUTC()));
   for(let i=0;i<active.length;i++)for(let j=i+1;j<active.length;j++){const intersection=overlap(active[i],active[j]);if(intersection)conflicts.set(`blocks:${[active[i].id,active[j].id].sort().join(":")}`,intersection.length("milliseconds"));}
-  for(const block of active)for(const event of events){const start=DateTime.fromISO(block.start).toUTC(),end=DateTime.fromISO(block.end).toUTC(),eventStart=DateTime.fromISO(event.start).toUTC(),eventEnd=DateTime.fromISO(event.end).toUTC();const isOwnCopy=event.id===`${block.id}@notion-tasks.local`&&eventStart.toMillis()===start.toMillis()&&eventEnd.toMillis()===end.toMillis();if(isOwnCopy)continue;const intersection=Interval.fromDateTimes(start,end).intersection(Interval.fromDateTimes(eventStart,eventEnd));if(intersection)conflicts.set(`event:${block.id}:${event.id}`,intersection.length("milliseconds"));}
+  for(const block of active)for(const event of events){const start=DateTime.fromISO(block.start).toUTC(),end=DateTime.fromISO(block.end).toUTC(),eventStart=DateTime.fromISO(event.start).toUTC(),eventEnd=DateTime.fromISO(event.end).toUTC();const isOwned=block.remote&&event.remote?.provider===block.remote.provider&&event.remote?.accountId===block.remote.accountId&&event.remote?.calendarId===block.remote.calendarId&&event.remote?.eventId===block.remote.eventId&&event.ownership?.installationId===installationId&&event.ownership?.blockId===block.id;const isLegacyCopy=!live&&event.id===`${block.id}@notion-tasks.local`&&eventStart.toMillis()===start.toMillis()&&eventEnd.toMillis()===end.toMillis();if(isOwned||isLegacyCopy)continue;const intersection=Interval.fromDateTimes(start,end).intersection(Interval.fromDateTimes(eventStart,eventEnd));if(intersection)conflicts.set(`event:${block.id}:${event.id}`,intersection.length("milliseconds"));}
   return conflicts;
 }
 function validZone(zone: string): boolean { return DateTime.now().setZone(zone).isValid; }
@@ -39,9 +40,22 @@ export function cleanPlanning(value: unknown): PlanningData {
   if (!Number.isInteger(settings.endHour)||settings.endHour<1||settings.endHour>24) settings.endHour=DEFAULT_PLANNING.settings.endHour;
   if(settings.startHour>=settings.endHour){settings.startHour=DEFAULT_PLANNING.settings.startHour;settings.endHour=DEFAULT_PLANNING.settings.endHour;}
   if(typeof settings.allowEmptyCalendar!=="boolean")settings.allowEmptyCalendar=false;
-  const blocks = Array.isArray(d.blocks) ? d.blocks.filter(b => b && typeof b.id === "string" && typeof b.start === "string" && typeof b.end === "string" && DateTime.fromISO(b.start).isValid && DateTime.fromISO(b.end).isValid && DateTime.fromISO(b.start) < DateTime.fromISO(b.end)) : [];
+  const blocks = Array.isArray(d.blocks) ? d.blocks.filter(b => b && typeof b.id === "string" && typeof b.start === "string" && typeof b.end === "string" && DateTime.fromISO(b.start).isValid && DateTime.fromISO(b.end).isValid && DateTime.fromISO(b.start) < DateTime.fromISO(b.end)).map(b => ({ ...b, remote: b.remote && ["google", "notion"].includes(b.remote.provider) && typeof b.remote.accountId === "string" && typeof b.remote.calendarId === "string" && typeof b.remote.eventId === "string" && typeof b.remote.version === "string" ? b.remote : undefined })) : [];
   const operations = Array.isArray(d.operations) ? d.operations.filter(o=>o&&typeof o.id==="string"&&o.parent&&typeof o.parent.taskId==="string"&&typeof o.parent.sourceId==="string"&&Array.isArray(o.steps)&&["in-progress","complete","recovery-needed"].includes(o.status)).map(o=>({...o,steps:o.steps.filter(s=>s&&typeof s.name==="string"&&Number.isInteger(s.estimateMinutes)&&s.estimateMinutes>0&&Number.isInteger(s.order)&&["pending","creating","created","failed","recovery-needed"].includes(s.status)).map(s=>({...s,ref:s.ref&&typeof s.ref.taskId==="string"&&typeof s.ref.sourceId==="string"?s.ref:undefined,message:typeof s.message==="string"?s.message:undefined}))})) : [];
-  return { tasks, events, blocks, settings, operations, calendarImportedAt: typeof d.calendarImportedAt === "string" ? d.calendarImportedAt : null, calendarSource: d.calendarSource === "ics" || d.calendarSource === "manual" ? d.calendarSource : null, inputRevision: Number.isInteger(d.inputRevision) && d.inputRevision! >= 0 ? d.inputRevision! : 0 };
+  const rawSync = d.calendarSync && typeof d.calendarSync === "object" ? d.calendarSync as NonNullable<PlanningData["calendarSync"]> : undefined;
+  const journal = Array.isArray(rawSync?.journal) ? rawSync.journal.map(operation => {
+    if (!operation || !Array.isArray(operation.steps)) return operation;
+    const interruptedCreate = operation.steps.some(step => step?.kind === "create" && step.status === "in-progress");
+    if (!interruptedCreate) return operation;
+    const steps = operation.steps.map(step => {
+      if (step.kind === "create" && step.status === "in-progress") return { ...step, status: "recovery-needed" as const, message: "The app stopped while this calendar create was in progress. Check for its matching event marker." };
+      if (step.status === "pending") return { ...step, status: "absent-confirmed" as const, message: "This step had not started when the app stopped. Generate a fresh plan before trying again." };
+      return step;
+    });
+    return { ...operation, status: "recovery-needed" as const, steps };
+  }) : [];
+  const calendarSync = { ...DEFAULT_PLANNING.calendarSync!, ...(rawSync ?? {}), calendars: Array.isArray(rawSync?.calendars) ? rawSync!.calendars : [], selectedKeys: Array.isArray(rawSync?.selectedKeys) ? rawSync!.selectedKeys.filter(x => typeof x === "string") : [], journal };
+  return { tasks, events, blocks, settings, operations, calendarSync, calendarImportedAt: typeof d.calendarImportedAt === "string" ? d.calendarImportedAt : null, calendarSource: d.calendarSource === "ics" || d.calendarSource === "manual" ? d.calendarSource : null, inputRevision: Number.isInteger(d.inputRevision) && d.inputRevision! >= 0 ? d.inputRevision! : 0 };
 }
 
 export function setEstimate(data: PlanningData, ref: TaskRef, minutes: number | null): PlanningData {
@@ -86,10 +100,12 @@ export function generatePlan(data: PlanningData, state: AppState, now = DateTime
   const { timezone, workdays, startHour, endHour } = data.settings;
   if (!validZone(timezone) || startHour < 0 || endHour > 24 || startHour >= endHour) throw new Error("Set a valid timezone and working hours first.");
   now = now.setZone(timezone);
-  if (data.calendarSource!=="ics" && !data.settings.allowEmptyCalendar) throw new Error("Import a calendar snapshot or explicitly choose to plan against an empty calendar. Manual commitments alone do not confirm that the calendar snapshot is complete.");
+  const liveReady = data.calendarSync?.mode === "live" && Boolean(data.calendarSync.lastSyncedAt) && !data.calendarSync.error;
+  if (data.calendarSync?.mode === "live" && !liveReady) throw new Error(data.calendarSync.error || "Refresh the selected calendars before planning.");
+  if (!liveReady && data.calendarSource!=="ics" && !data.settings.allowEmptyCalendar) throw new Error("Import a calendar snapshot or explicitly choose to plan against an empty calendar. Manual commitments alone do not confirm that the calendar snapshot is complete.");
   const horizonStart = now.startOf("day");
   const removals: PlanProposal["removals"] = data.blocks.filter(b=>DateTime.fromISO(b.start)>now.toUTC()).flatMap(b=>{const task=state.tasks.find(t=>t.id===b.ref.taskId&&t.sourceId===b.ref.sourceId);return !task?[{blockId:b.id,ref:b.ref,reason:"Task is no longer available; review this block"}]:task.completed?[{blockId:b.id,ref:b.ref,reason:"Task is completed; remove its future block"}]:[];});
-  const fixed = data.events.map(e => ({event:e,interval:Interval.fromDateTimes(DateTime.fromISO(e.start).toUTC(), DateTime.fromISO(e.end).toUTC())}));
+  const fixed = data.events.filter(e => !data.blocks.some(b => b.remote && e.remote?.provider===b.remote.provider && e.remote?.eventId === b.remote.eventId && e.remote?.calendarId === b.remote.calendarId && e.remote?.accountId === b.remote.accountId && e.ownership?.installationId===data.calendarSync?.installationId && e.ownership?.blockId===b.id)).map(e => ({event:e,interval:Interval.fromDateTimes(DateTime.fromISO(e.start).toUTC(), DateTime.fromISO(e.end).toUTC())}));
   const movable = data.blocks.filter(b=>DateTime.fromISO(b.start)>now.toUTC()&&DateTime.fromISO(b.start)<horizonStart.plus({days:7}).toUTC()&&state.tasks.some(t=>t.id===b.ref.taskId&&t.sourceId===b.ref.sourceId&&!t.completed));
   const conflicts = new Set(movable.filter(b=>fixed.some(f=>{const block=Interval.fromDateTimes(DateTime.fromISO(b.start).toUTC(),DateTime.fromISO(b.end).toUTC());const isOwnCopy=f.event.id===`${b.id}@notion-tasks.local`&&f.interval.start!.toMillis()===block.start!.toMillis()&&f.interval.end!.toMillis()===block.end!.toMillis();return !isOwnCopy&&block.overlaps(f.interval);})).map(b=>b.id));
   const busy: Interval[] = [...fixed.map(x=>x.interval), ...data.blocks.filter(b=>DateTime.fromISO(b.end)>now.toUTC()&&!conflicts.has(b.id)).map(b=>Interval.fromDateTimes(DateTime.fromISO(b.start).toUTC(),DateTime.fromISO(b.end).toUTC()))];
@@ -132,7 +148,7 @@ export function approvePlan(data: PlanningData, state: AppState, proposal: PlanP
   const removed=new Set([...requestedRemovals.map(x=>x.blockId),...requestedMoves.map(x=>x.blockId)]);
   const moved:OwnedBlock[]=requestedMoves.map(m=>({id:m.blockId,ref:m.ref,start:m.start,end:m.end,approvedAt:new Date().toISOString()}));
   const blocks=[...data.blocks.filter(b=>!removed.has(b.id)),...moved,...additions.filter(x=>!data.blocks.some(b=>b.id===x.id))];
-  const priorConflicts=conflictSeverity(data.blocks,data.events,approvalNow),nextConflicts=conflictSeverity(blocks,data.events,approvalNow);
+  const priorConflicts=conflictSeverity(data.blocks,data.events,approvalNow,data.calendarSync?.installationId,data.calendarSync?.mode==="live"),nextConflicts=conflictSeverity(blocks,data.events,approvalNow,data.calendarSync?.installationId,data.calendarSync?.mode==="live");
   for(const [key,severity] of nextConflicts)if(severity>(priorConflicts.get(key)||0))throw new Error("These selected changes introduce or worsen an overlap with approved work or a fixed calendar event. Review the conflicting changes together.");
   const affectedParents=new Map<string,TaskRef>();
   for(const ref of [...requested.map(x=>x.ref),...requestedMoves.map(x=>x.ref),...requestedRemovals.map(x=>x.ref)]){const row=data.tasks.find(x=>refKey(x.ref)===refKey(ref));if(row?.parent)affectedParents.set(refKey(row.parent),row.parent);}
