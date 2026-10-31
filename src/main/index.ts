@@ -472,6 +472,7 @@ export class DesktopRuntime {
     ipcMain.handle("desktop:calendar-import", guarded((ics) => this.importCalendar(ics)));
     ipcMain.handle("desktop:calendar-add-event", guarded((event) => this.addCalendarEvent(event)));
     ipcMain.handle("desktop:calendar-google-configure", guarded((json) => this.configureGoogleCalendar(json)));
+    ipcMain.handle("desktop:calendar-google-setup-help", guarded(async () => { await shell.openExternal("https://console.cloud.google.com/auth/clients"); }));
     ipcMain.handle("desktop:calendar-google-connect", guarded(() => this.connectGoogleCalendar()));
     ipcMain.handle("desktop:calendar-google-cancel", guarded(() => this.cancelGoogleCalendarConnection()));
     ipcMain.handle("desktop:calendar-google-disconnect", guarded(() => this.disconnectGoogleCalendar()));

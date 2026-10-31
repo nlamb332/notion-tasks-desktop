@@ -448,6 +448,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .calendar-destination { display: flex; flex-direction: column; gap: 8px; margin: 18px 0 8px; font-size: 13px; font-weight: 600; }
 .calendar-destination select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); color: var(--text); font: inherit; }
 .calendar-selection-help { display: block; margin-bottom: 20px; color: var(--muted); line-height: 1.6; }
+.calendar-connection-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.calendar-setup-status { padding: 12px 14px; border-radius: 8px; background: var(--blue-soft); color: var(--text); }
+.calendar-setup-panel, .notion-database-option { margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.calendar-setup-panel summary, .notion-database-option summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.calendar-setup-panel ol { padding-left: 20px; font-size: 13px; line-height: 1.7; color: var(--muted); }
+.calendar-client-import { display: flex; flex-direction: column; gap: 8px; margin: 16px 0 8px; font-size: 13px; }
+.calendar-client-import input { max-width: 100%; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+.calendar-setup-panel small { display: block; color: var(--muted); line-height: 1.6; }
 [data-theme="dark"] { color-scheme: dark; --bg: #121821; --panel: #17202c; --panel-muted: #202b3a; --line: #293545; --line-strong: #354358; --text: #e4eaf3; --muted: #93a0b3; --blue-soft: #1d3564; --shadow: 0 12px 34px rgba(0, 0, 0, .24); }
 [data-theme="dark"] .sidebar, [data-theme="dark"] .topbar, [data-theme="dark"] .detail-panel, [data-theme="dark"] .compact-toolbar, [data-theme="dark"] .connect-card, [data-theme="dark"] .add-source-card, [data-theme="dark"] .preference-list, [data-theme="dark"] .connected-card, [data-theme="dark"] .provider-connection-card, [data-theme="dark"] .source-card, [data-theme="dark"] .candidate, [data-theme="dark"] .mapping-preview, [data-theme="dark"] .toast, [data-theme="dark"] .button-secondary, [data-theme="dark"] .date-edit-row input, [data-theme="dark"] .filter-bar select, [data-theme="dark"] .filter-bar input, [data-theme="dark"] .mapping-grid select, [data-theme="dark"] .property-content select, [data-theme="dark"] .property-content input, [data-theme="dark"] .provider-input-row input, [data-theme="dark"] .provider-wide-input input, [data-theme="dark"] .plane-project-picker select { background: #17202c; }
 [data-theme="dark"] .main-column, [data-theme="dark"] .compact-shell { background: #17202c; }
