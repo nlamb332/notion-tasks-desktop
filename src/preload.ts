@@ -16,7 +16,7 @@ const channels = {
   toggleStar: "desktop:toggle-star",
   setSourceColor: "desktop:set-source-color",
   setSettings: "desktop:set-settings",
-  planningEstimate: "desktop:planning-estimate", planningLinks: "desktop:planning-links", planningCreateBreakdown: "desktop:planning-create-breakdown", planningReconcileBreakdown: "desktop:planning-reconcile-breakdown", planningSettings: "desktop:planning-settings", calendarImport: "desktop:calendar-import", calendarAdd: "desktop:calendar-add-event", planGenerate: "desktop:plan-generate", planApprove: "desktop:plan-approve", calendarExport: "desktop:calendar-export",
+  planningEstimate: "desktop:planning-estimate", planningLinks: "desktop:planning-links", planningCreateBreakdown: "desktop:planning-create-breakdown", planningReconcileBreakdown: "desktop:planning-reconcile-breakdown", planningSettings: "desktop:planning-settings", calendarImport: "desktop:calendar-import", calendarUseLocal: "desktop:calendar-use-local", calendarAdd: "desktop:calendar-add-event", planGenerate: "desktop:plan-generate", planApprove: "desktop:plan-approve", calendarExport: "desktop:calendar-export",
   openNotion: "desktop:open-notion",
   state: "desktop:state",
 } as const;
@@ -112,6 +112,7 @@ const desktop: DesktopAPI = {
   reconcileBreakdownStep: (operationId, order, resolution) => ipcRenderer.invoke(channels.planningReconcileBreakdown, operationId, order, resolution),
   updatePlanningSettings: (settings: Partial<PlanningSettings>) => ipcRenderer.invoke(channels.planningSettings, settings),
   importCalendar: (ics: string) => ipcRenderer.invoke(channels.calendarImport, ensureString(ics, "calendar")),
+  useLocalCalendar: () => ipcRenderer.invoke(channels.calendarUseLocal),
   configureGoogleCalendar: (clientJson: string) => ipcRenderer.invoke("desktop:calendar-google-configure", ensureString(clientJson, "clientJson")),
   openGoogleCalendarSetup: () => ipcRenderer.invoke("desktop:calendar-google-setup-help"),
   connectGoogleCalendar: () => ipcRenderer.invoke("desktop:calendar-google-connect"),

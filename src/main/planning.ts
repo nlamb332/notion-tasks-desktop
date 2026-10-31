@@ -55,7 +55,22 @@ export function cleanPlanning(value: unknown): PlanningData {
     return { ...operation, status: "recovery-needed" as const, steps };
   }) : [];
   const calendarSync = { ...DEFAULT_PLANNING.calendarSync!, ...(rawSync ?? {}), calendars: Array.isArray(rawSync?.calendars) ? rawSync!.calendars : [], selectedKeys: Array.isArray(rawSync?.selectedKeys) ? rawSync!.selectedKeys.filter(x => typeof x === "string") : [], journal };
-  return { tasks, events, blocks, settings, operations, calendarSync, calendarImportedAt: typeof d.calendarImportedAt === "string" ? d.calendarImportedAt : null, calendarSource: d.calendarSource === "ics" || d.calendarSource === "manual" ? d.calendarSource : null, inputRevision: Number.isInteger(d.inputRevision) && d.inputRevision! >= 0 ? d.inputRevision! : 0 };
+  const rawLocal = d.localCalendar;
+  const localCalendar = rawLocal && Array.isArray(rawLocal.events) ? { events: rawLocal.events.filter(e => e && typeof e.id === "string" && typeof e.title === "string" && DateTime.fromISO(e.start).isValid && DateTime.fromISO(e.end).isValid && DateTime.fromISO(e.start) < DateTime.fromISO(e.end)), importedAt: typeof rawLocal.importedAt === "string" ? rawLocal.importedAt : null, source: rawLocal.source === "ics" || rawLocal.source === "manual" ? rawLocal.source : null } : undefined;
+  return { tasks, events, blocks, settings, operations, calendarSync, ...(localCalendar ? { localCalendar } : {}), calendarImportedAt: typeof d.calendarImportedAt === "string" ? d.calendarImportedAt : null, calendarSource: d.calendarSource === "ics" || d.calendarSource === "manual" ? d.calendarSource : null, inputRevision: Number.isInteger(d.inputRevision) && d.inputRevision! >= 0 ? d.inputRevision! : 0 };
+}
+
+function isManualEvent(event: CalendarEvent): boolean { return event.id.startsWith("manual-"); }
+/** Live refreshes replace imported events, so keep an ICS snapshot aside when calendars go live. */
+export function stashLocalCalendar(data: PlanningData): PlanningData {
+  if (data.calendarSource !== "ics") return data;
+  return { ...data, localCalendar: { events: data.events.filter(event => !isManualEvent(event) && !event.remote), importedAt: data.calendarImportedAt, source: data.calendarSource } };
+}
+/** The explicit switch to local data. Failures and disconnects never call this. */
+export function restoreLocalCalendar(data: PlanningData): PlanningData {
+  const sync = data.calendarSync!; const manual = data.events.filter(isManualEvent);
+  const snapshot = sync.mode === "live" ? data.localCalendar : { events: data.events.filter(event => !isManualEvent(event) && !event.remote), importedAt: data.calendarImportedAt, source: data.calendarSource };
+  return { ...data, events: [...(snapshot?.events ?? []), ...manual], calendarImportedAt: snapshot?.importedAt ?? null, calendarSource: snapshot?.source ?? (manual.length ? "manual" : null), calendarSync: { ...sync, selectedKeys: [], defaultDestinationKey: null, mode: "local", error: null }, settings: { ...data.settings, allowEmptyCalendar: false }, inputRevision: data.inputRevision + 1 };
 }
 
 export function setEstimate(data: PlanningData, ref: TaskRef, minutes: number | null): PlanningData {
@@ -102,7 +117,7 @@ export function generatePlan(data: PlanningData, state: AppState, now = DateTime
   now = now.setZone(timezone);
   const liveReady = data.calendarSync?.mode === "live" && Boolean(data.calendarSync.lastSyncedAt) && !data.calendarSync.error;
   if (data.calendarSync?.mode === "live" && !liveReady) throw new Error(data.calendarSync.error || "Refresh the selected calendars before planning.");
-  if (!liveReady && data.calendarSource!=="ics" && !data.settings.allowEmptyCalendar) throw new Error("Import a calendar snapshot or explicitly choose to plan against an empty calendar. Manual commitments alone do not confirm that the calendar snapshot is complete.");
+  if (!liveReady && data.calendarSource!=="ics" && !data.settings.allowEmptyCalendar) throw new Error("Connect and select a calendar in Planning, or choose local data in Settings → Diagnostics. Manual commitments alone do not confirm that the calendar snapshot is complete.");
   const horizonStart = now.startOf("day");
   const removals: PlanProposal["removals"] = data.blocks.filter(b=>DateTime.fromISO(b.start)>now.toUTC()).flatMap(b=>{const task=state.tasks.find(t=>t.id===b.ref.taskId&&t.sourceId===b.ref.sourceId);return !task?[{blockId:b.id,ref:b.ref,reason:"Task is no longer available; review this block"}]:task.completed?[{blockId:b.id,ref:b.ref,reason:"Task is completed; remove its future block"}]:[];});
   const fixed = data.events.filter(e => !data.blocks.some(b => b.remote && e.remote?.provider===b.remote.provider && e.remote?.eventId === b.remote.eventId && e.remote?.calendarId === b.remote.calendarId && e.remote?.accountId === b.remote.accountId && e.ownership?.installationId===data.calendarSync?.installationId && e.ownership?.blockId===b.id)).map(e => ({event:e,interval:Interval.fromDateTimes(DateTime.fromISO(e.start).toUTC(), DateTime.fromISO(e.end).toUTC())}));

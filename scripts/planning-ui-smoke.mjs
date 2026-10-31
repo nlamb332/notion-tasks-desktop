@@ -40,6 +40,15 @@ try {
   await start.fill('20');await start.press('Enter');await page.getByRole('alert').filter({hasText:'later than the start'}).waitFor();
   await end.fill('22');await end.press('Enter');await page.waitForFunction(()=>window.desktop.getState().then(s=>s.planning.settings.startHour===20&&s.planning.settings.endHour===22));
 
+  // Local fallback lives in Diagnostics, and the planning view names the data it is using.
+  assert.equal(await page.getByLabel('Import ICS calendar',{exact:true}).count(),0);
+  await page.getByRole('status').filter({hasText:'No calendar connected'}).getByRole('button',{name:'Open Diagnostics',exact:true}).click();
+  await page.getByRole('heading',{name:'Calendar fallback tools',exact:true}).waitFor();
+  await page.getByLabel('Import ICS calendar',{exact:true}).setInputFiles({name:'snapshot.ics',mimeType:'text/calendar',buffer:Buffer.from('BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:snapshot\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nSUMMARY:Imported dentist\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n')});
+  await page.getByText('Imported dentist',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'Planning',exact:true}).click();
+  await page.getByRole('status').filter({hasText:'Planning from local data'}).waitFor();
+
   assert.deepEqual(errors,[]);
   console.log('Planning UI smoke passed');
 } finally {await app.close();}
