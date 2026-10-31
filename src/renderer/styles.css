@@ -440,6 +440,14 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
   .compact-toolbar .sync-status { max-width: 16px; margin-left: auto; }
   .compact-toolbar .sync-status-label, .compact-toolbar .sync-error-details { display: none; }
 }
+.calendar-google-controls { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.calendar-google-controls > label { flex: 1 1 100%; min-width: 0; }
+.calendar-google-controls > button { flex: 0 1 auto; }
+.calendar-read-choice { display: flex; align-items: center; gap: 8px; margin: 10px 0; color: var(--muted); }
+.calendar-read-choice input { flex: 0 0 auto; }
+.calendar-destination { display: flex; flex-direction: column; gap: 8px; margin: 18px 0 8px; font-size: 13px; font-weight: 600; }
+.calendar-destination select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); color: var(--text); font: inherit; }
+.calendar-selection-help { display: block; margin-bottom: 20px; color: var(--muted); line-height: 1.6; }
 [data-theme="dark"] { color-scheme: dark; --bg: #121821; --panel: #17202c; --panel-muted: #202b3a; --line: #293545; --line-strong: #354358; --text: #e4eaf3; --muted: #93a0b3; --blue-soft: #1d3564; --shadow: 0 12px 34px rgba(0, 0, 0, .24); }
 [data-theme="dark"] .sidebar, [data-theme="dark"] .topbar, [data-theme="dark"] .detail-panel, [data-theme="dark"] .compact-toolbar, [data-theme="dark"] .connect-card, [data-theme="dark"] .add-source-card, [data-theme="dark"] .preference-list, [data-theme="dark"] .connected-card, [data-theme="dark"] .provider-connection-card, [data-theme="dark"] .source-card, [data-theme="dark"] .candidate, [data-theme="dark"] .mapping-preview, [data-theme="dark"] .toast, [data-theme="dark"] .button-secondary, [data-theme="dark"] .date-edit-row input, [data-theme="dark"] .filter-bar select, [data-theme="dark"] .filter-bar input, [data-theme="dark"] .mapping-grid select, [data-theme="dark"] .property-content select, [data-theme="dark"] .property-content input, [data-theme="dark"] .provider-input-row input, [data-theme="dark"] .provider-wide-input input, [data-theme="dark"] .plane-project-picker select { background: #17202c; }
 [data-theme="dark"] .main-column, [data-theme="dark"] .compact-shell { background: #17202c; }

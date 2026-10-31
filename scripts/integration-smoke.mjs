@@ -15,7 +15,7 @@ try {
    const ids=['33333333-3333-4333-8333-333333333333','44444444-4444-4444-8444-444444444444'];
    const names=['Tasks','Work Tasks'];
    const g=globalThis;
-   g.__fixture={offline:[],writes:[],pages:{},next:1,createRequests:0,failCreateNumber:0,failCreateMode:null,pauseCreateName:null,pendingCreateName:null};
+   g.__fixture={offline:[],writes:[],pages:{},blockChildren:{},next:1,createRequests:0,failCreateNumber:0,failCreateMode:null,pauseCreateName:null,pendingCreateName:null};
    const f=g.__fixture;
    const schema=i=>({id:ids[i],parent:{database_id:dbs[i]},title:[{plain_text:names[i]}],properties:{
      [i?'Name':'Task']:{id:'title',name:i?'Name':'Task',type:'title',title:{}},
@@ -39,12 +39,13 @@ try {
       return reply(schema(dsIndex));
     }
     if(p.startsWith('/databases/')){const i=dbs.findIndex(id=>p.endsWith(id));return i<0?reply({},404):reply({id:dbs[i],data_sources:[{id:ids[i],name:names[i]}]});}
+    if(p.startsWith('/blocks/')&&p.endsWith('/children')){const id=p.split('/').at(-2);return reply({results:f.blockChildren[id]||[],has_more:false});}
     if(p==='/pages'&&method==='POST'){
       f.createRequests++;
       const failure=f.createRequests===f.failCreateNumber?f.failCreateMode:null;
       if(failure==='known')return reply({message:'mocked create rejected'},403);
       const body=JSON.parse(init.body);const i=ids.indexOf(body.parent.data_source_id);const id=`cccccccc-cccc-cccc-cccc-${String(f.next++).padStart(12,'0')}`;
-      const next=make(id,i,'');f.pages[id]=next;
+      const next=make(id,i,'');f.pages[id]=next;f.blockChildren[id]=body.children||[];
       const fields=body.properties;for(const [key,val]of Object.entries(fields)){if(key==='title')next.properties.title.title=val.title.map(x=>({plain_text:x.text.content}));else if(key==='due')next.properties.due.date=val.date;else if(key==='status'){const s=schema(i).properties.Status.status.options.find(x=>x.id===val.status.id);next.properties.status.status=s;}}
       f.writes.push({method,body});const createdName=body.properties.title.title.map(x=>x.text.content).join('');if(createdName===f.pauseCreateName){f.pendingCreateName=createdName;await new Promise(resolve=>{f.releaseCreate=resolve;});f.pendingCreateName=null;}return failure==='ambiguous'?reply({message:'mocked gateway timeout after create'},500):reply({id});
     }
