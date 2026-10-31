@@ -50,6 +50,8 @@ export interface BreakdownOperation { id: string; parent: TaskRef; steps: (Break
 export interface LocalCalendarSnapshot { events: CalendarEvent[]; importedAt: string | null; source: 'ics' | 'manual' | null }
 export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[]; calendarSync?: CalendarSyncState; localCalendar?: LocalCalendarSnapshot }
 export interface PlanProposal { id: string; inputRevision: number; generatedAt: string; expiresAt: string; items: { ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; moves: { blockId: string; ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; removals: { blockId: string; ref: TaskRef; reason: string }[]; unscheduled: { ref: TaskRef; reason: string; minutes: number | null }[]; capacityMinutes: number; allocatedMinutes: number }
+/** A user-chosen start for a proposed item or move. The approved duration and task link come from the proposal. */
+export interface PlanPlacement { key: string; start: string }
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
 export interface SourceCandidate { id: string; databaseId: string; name: string; properties: PropertyInfo[]; provider?: SourceProvider; workspaceSlug?: string; projectId?: string; baseUrl?: string }
 export interface SourceConfig extends SourceCandidate { color?: SourceColor; mapping: { title: string; due: string | null; status: string; complete: string; reopen: string; owner?: string | null } }
@@ -106,7 +108,7 @@ export interface DesktopAPI {
   reconcileCalendarOperation(operationId: string, stepIndex: number, resolution: { kind: "existing-event"; eventId: string } | { kind: "confirm-absent" }): Promise<AppState>;
   addCalendarEvent(event: Omit<CalendarEvent, 'id'>): Promise<AppState>;
   generatePlan(): Promise<PlanProposal>;
-  approvePlan(proposal: PlanProposal, selected: string[]): Promise<AppState>;
+  approvePlan(proposal: PlanProposal, selected: string[], placements?: PlanPlacement[]): Promise<AppState>;
   exportCalendar(): Promise<string>;
  openNotion(id: string): Promise<void>;
  onState(callback: (state: AppState) => void): () => void;

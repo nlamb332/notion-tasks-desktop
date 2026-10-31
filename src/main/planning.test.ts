@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
-import type { AppState, TaskRef } from "../shared/types";
+import type { AppState, PlanningData, TaskRef } from "../shared/types";
+import { applyPlacements, fixedEvents, placementConflict } from "../shared/plan-placement";
 import { approvePlan, cleanPlanning, DEFAULT_PLANNING as SYSTEM_DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, restoreLocalCalendar, rollup, setEstimate, stashLocalCalendar } from "./planning";
 
 const DEFAULT_PLANNING = { ...SYSTEM_DEFAULT_PLANNING, settings: { ...SYSTEM_DEFAULT_PLANNING.settings, timezone: "America/Chicago" } };
@@ -70,6 +71,75 @@ describe("rolling calendar planning",()=>{
   it("keeps planning paused instead of using local data after a live refresh failure",()=>{
     const s=state([task("a")]);const d={...setEstimate(DEFAULT_PLANNING,ref("a"),30),calendarSource:"ics" as const,localCalendar:{events:[],importedAt:"snapshot",source:"ics" as const},calendarSync:{...DEFAULT_PLANNING.calendarSync!,mode:"live" as const,lastSyncedAt:"2026-11-02T13:00:00Z",error:"Google sign-in expired."}};
     expect(()=>generatePlan(d,s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"))).toThrow("Google sign-in expired.");
+  });
+  describe("user placements",()=>{
+    const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");
+    const key=(id:string)=>JSON.stringify(["notion","db",id]);
+    const ready=(minutes=30)=>({...setEstimate(DEFAULT_PLANNING,ref("a"),minutes),calendarImportedAt:"snapshot",calendarSource:"ics" as const});
+    const check=(d:PlanningData,s:AppState,p:ReturnType<typeof generatePlan>,start:string,k=key("a"),selected=[k])=>placementConflict(k,{data:d,tasks:s.tasks,proposal:applyPlacements(p,[{key:k,start}]),selected,now});
+    it("approves the user's time and keeps the task link and duration",()=>{
+      const s=state([task("a")]);const d=ready(45);const p=generatePlan(d,s,now);const start="2026-11-03T18:00:00.000Z";
+      const approved=approvePlan(d,s,p,[key("a")],now,[{key:key("a"),start}]);
+      expect(approved.blocks).toHaveLength(1);expect(approved.blocks[0]).toMatchObject({ref:ref("a"),start,end:"2026-11-03T18:45:00.000Z"});
+      expect(approvePlan(approved,s,p,[key("a")],now,[{key:key("a"),start}])).toEqual(approved);
+    });
+    it("rejects placements for unknown keys, repeats, and invalid times",()=>{
+      const s=state([task("a")]);const d=ready();const p=generatePlan(d,s,now);
+      expect(()=>applyPlacements(p,[{key:key("other"),start:"2026-11-03T18:00:00Z"}])).toThrow(/invalid/);
+      expect(()=>applyPlacements(p,[{key:key("a"),start:"soon"}])).toThrow(/invalid/);
+      expect(()=>applyPlacements(p,[{key:key("a"),start:"2026-11-03T18:00:00Z"},{key:key("a"),start:"2026-11-03T19:00:00Z"}])).toThrow(/more than once/);
+    });
+    it("keeps availability, the horizon, and past times out of reach",()=>{
+      const s=state([task("a")]);const d=ready();const p=generatePlan(d,s,now);
+      expect(check(d,s,p,"2026-11-03T18:00:00.000Z")).toBeNull();
+      expect(check(d,s,p,"2026-11-03T12:00:00.000Z")).toMatch(/working hours/);
+      expect(check(d,s,p,"2026-11-03T22:45:00.000Z")).toMatch(/working hours/);
+      expect(check(d,s,p,"2026-11-07T18:00:00.000Z")).toMatch(/Saturday is not a working day/);
+      expect(check(d,s,p,"2026-11-09T18:00:00.000Z")).toMatch(/seven planning dates/);
+      expect(check(d,s,p,"2026-11-02T13:30:00.000Z")).toMatch(/passed/);
+    });
+    it("uses the planning timezone for working hours",()=>{
+      const s=state([task("a")]);const d={...ready(),settings:{...DEFAULT_PLANNING.settings,timezone:"Asia/Tokyo"}};const p=generatePlan(d,s,now);
+      expect(check(d,s,p,"2026-11-03T01:00:00.000Z")).toBeNull();
+      expect(check(d,s,p,"2026-11-03T18:00:00.000Z")).toMatch(/working/);
+    });
+    it("allows a block to end exactly at the end of a 24-hour working day",()=>{
+      const s=state([task("a")]);const d={...ready(),settings:{...DEFAULT_PLANNING.settings,timezone:"America/Chicago",startHour:0,endHour:24}};const p=generatePlan(d,s,now);
+      expect(check(d,s,p,"2026-11-04T05:30:00.000Z")).toBeNull();
+      expect(check(d,s,p,"2026-11-04T05:45:00.000Z")).toMatch(/working hours/);
+    });
+    it("names fixed events, approved blocks, and other proposals it would overlap",()=>{
+      const s=state([task("a"),task("b"),task("c")]);let d:PlanningData=ready();d=setEstimate(d,ref("b"),30);d={...d,events:[{id:"meeting",title:"Team meeting",start:"2026-11-03T18:00:00Z",end:"2026-11-03T19:00:00Z"}],blocks:[{id:"kept",ref:ref("c"),start:"2026-11-04T18:00:00Z",end:"2026-11-04T19:00:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const p=generatePlan(d,s,now);
+      expect(check(d,s,p,"2026-11-03T18:30:00.000Z")).toMatch(/Team meeting/);
+      expect(check(d,s,p,"2026-11-03T19:00:00.000Z")).toBeNull();
+      expect(check(d,s,p,"2026-11-04T18:30:00.000Z")).toMatch(/approved block for c/);
+      const b=p.items.find(x=>x.ref.taskId==="b")!;
+      expect(check(d,s,p,b.start,key("a"),[key("a"),key("b")])).toMatch(/proposed block for b/);
+      expect(check(d,s,p,b.start,key("a"),[key("a")])).toBeNull();
+    });
+    it("does not treat the calendar copy of an owned block as a fixed event",()=>{
+      const s=state([task("a"),task("owned")]);const d={...ready(),blocks:[{id:"owned-block",ref:ref("owned"),start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:30:00Z",approvedAt:"2026-10-30T00:00:00Z"}],events:[{id:"owned-block@notion-tasks.local",title:"owned",start:"2026-11-02T16:00:00Z",end:"2026-11-02T16:30:00Z"},{id:"real",title:"Real",start:"2026-11-02T17:00:00Z",end:"2026-11-02T17:30:00Z"}]};
+      expect(fixedEvents(d).map(x=>x.id)).toEqual(["real"]);
+    });
+    it("keeps breakdown steps in order",()=>{
+      const s=state([task("parent"),task("first"),task("second")]);let d=linkChildren(setEstimate(DEFAULT_PLANNING,ref("parent"),null),ref("parent"),[{ref:ref("first"),estimateMinutes:30,order:0},{ref:ref("second"),estimateMinutes:30,order:1}]);d={...d,calendarImportedAt:"snapshot",calendarSource:"ics"};const p=generatePlan(d,s,now);const selected=[key("first"),key("second")];
+      expect(check(d,s,p,"2026-11-03T18:00:00.000Z",key("first"),selected)).toMatch(/must finish before second/);
+      const reversed=applyPlacements(p,[{key:key("first"),start:"2026-11-03T18:00:00.000Z"},{key:key("second"),start:"2026-11-03T16:00:00.000Z"}]);
+      expect(placementConflict(key("second"),{data:d,tasks:s.tasks,proposal:reversed,selected,now})).toMatch(/first must finish first/);
+      expect(()=>approvePlan(d,s,p,selected,now,[{key:key("first"),start:"2026-11-03T18:00:00.000Z"}])).toThrow(/no longer fits/);
+    });
+    it("refuses a placement that passes its deadline",()=>{
+      const s=state([task("a",false,{start:"2026-11-03",end:null})]);const d=ready();const p=generatePlan(d,s,now);
+      expect(check(d,s,p,"2026-11-03T18:00:00.000Z")).toBeNull();expect(check(d,s,p,"2026-11-04T18:00:00.000Z")).toMatch(/deadline/);
+    });
+    it("moves a proposed block replacement and leaves unselected placements unchecked",()=>{
+      const s=state([task("a"),task("b")]);let d:PlanningData=ready();d={...d,events:[{id:"meeting",title:"Meeting",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"}],blocks:[{id:"owned",ref:ref("a"),start:"2026-11-02T15:30:00Z",end:"2026-11-02T16:00:00Z",approvedAt:"2026-10-30T00:00:00Z"}]};const p=generatePlan(d,s,now);const start="2026-11-03T20:00:00.000Z";
+      expect(approvePlan(d,s,p,["move:owned"],now,[{key:"move:owned",start}]).blocks[0]).toMatchObject({id:"owned",start,end:"2026-11-03T20:30:00.000Z"});
+    });
+    it("still rejects stale inputs instead of applying a placement",()=>{
+      const s=state([task("a")]);const d=ready();const p=generatePlan(d,s,now);
+      expect(()=>approvePlan({...d,inputRevision:d.inputRevision+1},s,p,[key("a")],now,[{key:key("a"),start:"2026-11-03T18:00:00.000Z"}])).toThrow(/stale/i);
+    });
   });
   it("rejects recurrence without replacing the prior snapshot",()=>{
     const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";
