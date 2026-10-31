@@ -5,7 +5,7 @@ The desktop shell, Notion and Plane adapters, and renderer are checked by automa
 ## Verified
 
 - `npm run typecheck`: passes.
-- `npm test`: 93 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, desktop synchronization contracts, rolling-calendar scheduling, ICS validation, local approval, and backward-compatible planning persistence.
+- `npm test`: 94 tests pass across backend, renderer helpers, optimistic completion/Undo, Notion boundary contracts, Plane pagination/endpoint isolation, provider credential persistence, owner mapping/filtering, desktop synchronization contracts, rolling-calendar scheduling, ICS validation, local approval, and backward-compatible planning persistence. The suite passes with both UTC and America/Chicago host timezones; fixtures use an explicit planning timezone, and the scheduler normalizes injected clocks to that timezone.
 - `npm run build`: production renderer and Electron bundles build successfully.
 - `npm run test:desktop`: shell, mocked Notion integration (including breakdown recovery), Plane integration, and updater suites pass in real Electron using isolated workspace-local user-data directories and synthetic API responses.
 - `node scripts/smoke.mjs --dev`: the Vite development renderer and Electron bridge pass the same shell smoke checks. Production retains its strict content policy; the development URL is limited to unpackaged loopback HTTP.
