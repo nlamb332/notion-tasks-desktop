@@ -113,6 +113,7 @@ const desktop: DesktopAPI = {
   updatePlanningSettings: (settings: Partial<PlanningSettings>) => ipcRenderer.invoke(channels.planningSettings, settings),
   importCalendar: (ics: string) => ipcRenderer.invoke(channels.calendarImport, ensureString(ics, "calendar")),
   configureGoogleCalendar: (clientJson: string) => ipcRenderer.invoke("desktop:calendar-google-configure", ensureString(clientJson, "clientJson")),
+  openGoogleCalendarSetup: () => ipcRenderer.invoke("desktop:calendar-google-setup-help"),
   connectGoogleCalendar: () => ipcRenderer.invoke("desktop:calendar-google-connect"),
   cancelGoogleCalendarConnection: () => ipcRenderer.invoke("desktop:calendar-google-cancel"),
   disconnectGoogleCalendar: () => ipcRenderer.invoke("desktop:calendar-google-disconnect"),

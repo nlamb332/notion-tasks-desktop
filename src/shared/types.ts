@@ -90,6 +90,7 @@ export interface DesktopAPI {
   updatePlanningSettings(settings: Partial<PlanningSettings>): Promise<AppState>;
   importCalendar(ics: string): Promise<AppState>;
   configureGoogleCalendar(clientJson: string): Promise<AppState>;
+  openGoogleCalendarSetup(): Promise<void>;
   connectGoogleCalendar(): Promise<AppState>;
   cancelGoogleCalendarConnection(): Promise<void>;
   disconnectGoogleCalendar(): Promise<AppState>;
