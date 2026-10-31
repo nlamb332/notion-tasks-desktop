@@ -85,6 +85,7 @@ export function rollup(ref: TaskRef, data: PlanningData, state: AppState) { retu
 export function generatePlan(data: PlanningData, state: AppState, now = DateTime.now().setZone(data.settings.timezone)): PlanProposal {
   const { timezone, workdays, startHour, endHour } = data.settings;
   if (!validZone(timezone) || startHour < 0 || endHour > 24 || startHour >= endHour) throw new Error("Set a valid timezone and working hours first.");
+  now = now.setZone(timezone);
   if (data.calendarSource!=="ics" && !data.settings.allowEmptyCalendar) throw new Error("Import a calendar snapshot or explicitly choose to plan against an empty calendar. Manual commitments alone do not confirm that the calendar snapshot is complete.");
   const horizonStart = now.startOf("day");
   const removals: PlanProposal["removals"] = data.blocks.filter(b=>DateTime.fromISO(b.start)>now.toUTC()).flatMap(b=>{const task=state.tasks.find(t=>t.id===b.ref.taskId&&t.sourceId===b.ref.sourceId);return !task?[{blockId:b.id,ref:b.ref,reason:"Task is no longer available; review this block"}]:task.completed?[{blockId:b.id,ref:b.ref,reason:"Task is completed; remove its future block"}]:[];});

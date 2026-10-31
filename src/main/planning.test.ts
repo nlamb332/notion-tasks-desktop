@@ -1,13 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
 import type { AppState, TaskRef } from "../shared/types";
-import { approvePlan, cleanPlanning, DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, rollup, setEstimate } from "./planning";
+import { approvePlan, cleanPlanning, DEFAULT_PLANNING as SYSTEM_DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, rollup, setEstimate } from "./planning";
+
+const DEFAULT_PLANNING = { ...SYSTEM_DEFAULT_PLANNING, settings: { ...SYSTEM_DEFAULT_PLANNING.settings, timezone: "America/Chicago" } };
 
 const ref=(taskId:string):TaskRef=>({provider:"notion",sourceId:"db",taskId});
 function state(tasks:AppState["tasks"]):AppState{return {connected:true,sources:[{id:"db",databaseId:"db",name:"Tasks",properties:[],mapping:{title:"t",due:null,status:"s",complete:"Done",reopen:"Todo"}}],tasks,stars:[],settings:{compact:false,alwaysOnTop:false,launchAtLogin:false,selectedList:"all",lastSourceId:"db"},sync:{syncing:false,lastSync:null,errors:{},onlineSources:["db"]},planning:{...DEFAULT_PLANNING,settings:{...DEFAULT_PLANNING.settings,timezone:"America/Chicago"}}};}
 const task=(id:string,completed=false,due:AppState["tasks"][number]["due"]=null):AppState["tasks"][number]=>({id,sourceId:"db",name:id,url:"",due,status:completed?"Done":"Todo",completed,lastEdited:"2026-01-01T00:00:00.000Z"});
 
 describe("rolling calendar planning",()=>{
+  it("uses the configured planning timezone regardless of the injected clock's zone",()=>{
+    const s=state([task("a")]);const d={...setEstimate(DEFAULT_PLANNING,ref("a"),30),calendarSource:"ics" as const,calendarImportedAt:"2026-11-02T14:00:00Z"};
+    const instant=DateTime.fromISO("2026-11-02T14:00:00Z",{setZone:true});
+    const utc=generatePlan(d,s,instant),local=generatePlan(d,s,instant.setZone("America/Chicago"));
+    expect(utc.items).toEqual(local.items);expect(utc.capacityMinutes).toBe(local.capacityMinutes);
+    expect(utc.items[0].start).toBe("2026-11-02T15:00:00.000Z");
+    expect(approvePlan(d,s,utc,[JSON.stringify(["notion","db","a"])],instant.plus({seconds:2})).blocks).toHaveLength(1);
+  });
   it("places an estimate in the gap between fixed events",()=>{
     const s=state([task("a")]);const date="2026-11-02";
     let d=setEstimate(DEFAULT_PLANNING,ref("a"),60);d={...d,calendarImportedAt:"2026-10-30T00:00:00.000Z",calendarSource:"ics",events:[{id:"before",title:"Before",start:`${date}T15:00:00.000Z`,end:`${date}T16:00:00.000Z`},{id:"after",title:"After",start:`${date}T17:00:00.000Z`,end:`${date}T18:00:00.000Z`}]};

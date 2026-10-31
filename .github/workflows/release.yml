@@ -32,11 +32,14 @@ jobs:
       - name: Validate tag and package version
         run: npm run validate:release -- ${{ github.ref_name }}
 
-      - name: Run checks
-        run: |
-          npm run typecheck
-          npm test
-          npm run build
+      - name: Run typecheck
+        run: npm run typecheck
+
+      - name: Run unit tests
+        run: npm test
+
+      - name: Build production app
+        run: npm run build
 
       - name: Build Windows installer
         shell: pwsh
