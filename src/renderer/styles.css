@@ -337,6 +337,13 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .plan-block strong { display: block; overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .plan-block.event { border: 1px solid var(--line-strong); background: var(--panel-muted); }
 .plan-block.approved { border: 1px solid var(--blue); background: var(--blue-soft); }
+.plan-block.approved.movable { cursor: grab; }
+.plan-block.approved.movable:focus-visible { outline: 3px solid rgba(47, 104, 216, .35); outline-offset: 0; }
+.plan-block.approved.pending { border-style: dashed; border-width: 1.5px; z-index: 2; }
+.plan-block.approved.dragging { opacity: .45; }
+.block-move-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; padding: 8px 10px; border: 1px solid var(--blue); border-radius: 7px; background: var(--blue-soft); font-size: 12px; }
+.block-move-bar span { flex: 1 1 220px; }
+.block-move-bar small { display: block; }
 .plan-block.proposed { border: 1.5px dashed var(--blue); background: var(--panel); cursor: grab; z-index: 2; }
 .plan-block.proposed span { color: var(--muted); font-size: 9px; }
 .plan-block.proposed:focus-visible { outline: 3px solid rgba(47, 104, 216, .35); outline-offset: 0; }

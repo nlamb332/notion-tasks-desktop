@@ -1,5 +1,5 @@
 import { DateTime, Interval } from "luxon";
-import type { CalendarEvent, PlanPlacement, PlanProposal, PlanningData, Task, TaskRef } from "./types";
+import type { CalendarEvent, OwnedBlock, PlanPlacement, PlanProposal, PlanningData, Task, TaskRef } from "./types";
 
 export function refKey(ref: TaskRef): string { return JSON.stringify([ref.provider, ref.sourceId, ref.taskId]); }
 export function moveKey(blockId: string): string { return `move:${blockId}`; }
@@ -12,6 +12,26 @@ export function taskDeadline(task: Task | undefined, timezone: string): DateTime
 export function fixedEvents(data: PlanningData): CalendarEvent[] {
   const installationId=data.calendarSync?.installationId;
   return data.events.filter(event=>!data.blocks.some(block=>event.id===`${block.id}@notion-tasks.local`||(block.remote&&event.remote?.provider===block.remote.provider&&event.remote?.accountId===block.remote.accountId&&event.remote?.calendarId===block.remote.calendarId&&event.remote?.eventId===block.remote.eventId&&event.ownership?.installationId===installationId&&event.ownership?.blockId===block.id)));
+}
+
+/** Calendar events stay read-only here. Only future blocks of open tasks can move, and linked blocks need their calendar live. */
+export function blockMoveBlocker(block: OwnedBlock, { data, tasks, now }: Pick<PlacementContext, "data" | "tasks" | "now">): string | null {
+  const task=tasks.find(item=>item.id===block.ref.taskId&&item.sourceId===block.ref.sourceId);
+  if(!task)return "This block's task is unavailable.";
+  if(task.completed)return "This block's task is completed.";
+  if(DateTime.fromISO(block.start).toUTC()<=now.toUTC())return "This block has already started.";
+  if(block.remote&&data.calendarSync?.mode!=="live")return "Reconnect this block's calendar before moving it.";
+  return null;
+}
+/** Returns why an approved block cannot move to a start, using the same rules as proposed blocks. */
+export function blockMoveConflict(blockId: string, start: string, { data, tasks, now }: Pick<PlacementContext, "data" | "tasks" | "now">): string | null {
+  const block=data.blocks.find(item=>item.id===blockId);if(!block)return "This block is no longer available.";
+  const blocked=blockMoveBlocker(block,{data,tasks,now});if(blocked)return blocked;
+  const utc=DateTime.fromISO(start).toUTC();if(!utc.isValid)return "Choose a valid time.";
+  const minutes=Math.round(DateTime.fromISO(block.end).diff(DateTime.fromISO(block.start),"minutes").minutes);
+  const generatedAt=now.toUTC().toISO()!,key=moveKey(blockId);
+  const proposal:PlanProposal={id:"",inputRevision:data.inputRevision,generatedAt,expiresAt:generatedAt,items:[],moves:[{blockId,ref:block.ref,start:utc.toISO()!,end:utc.plus({minutes}).toISO()!,minutes,reason:""}],removals:[],unscheduled:[],capacityMinutes:0,allocatedMinutes:0};
+  return placementConflict(key,{data,tasks,proposal,selected:[key],now});
 }
 
 /** Only a key and start are accepted, so a placement cannot change a task link or its duration. */
