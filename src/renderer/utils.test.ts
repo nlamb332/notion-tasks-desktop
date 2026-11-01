@@ -6,6 +6,7 @@ import {
   dateInputValue,
   filterTasks,
   listCounts,
+  parseWorkingHours,
   sortTasks,
   taskDateFromInputs,
   taskStatusTone,
@@ -135,5 +136,25 @@ describe('renderer date and task helpers', () => {
     expect(taskStatusTone('Not started')).toBe('planned');
     expect(taskStatusTone('Needs QA')).toBe('neutral');
     expect(taskStatusTone('Needs QA', true)).toBe('complete');
+  });
+});
+
+describe('parseWorkingHours', () => {
+  it('accepts a valid pair, including the end of the day', () => {
+    expect(parseWorkingHours('9', '17')).toEqual({ ok: true, startHour: 9, endHour: 17 });
+    expect(parseWorkingHours('0', '24')).toEqual({ ok: true, startHour: 0, endHour: 24 });
+  });
+  it('reports a cleared field instead of treating it as zero', () => {
+    expect(parseWorkingHours('', '17')).toMatchObject({ ok: false, field: 'start' });
+    expect(parseWorkingHours('9', ' ')).toMatchObject({ ok: false, field: 'end' });
+  });
+  it('rejects out-of-range and fractional hours', () => {
+    expect(parseWorkingHours('24', '24')).toMatchObject({ ok: false, field: 'start' });
+    expect(parseWorkingHours('9', '25')).toMatchObject({ ok: false, field: 'end' });
+    expect(parseWorkingHours('8.5', '17')).toMatchObject({ ok: false, field: 'start' });
+  });
+  it('rejects an end at or before the start', () => {
+    expect(parseWorkingHours('17', '9')).toMatchObject({ ok: false, field: 'end', message: expect.stringMatching(/later/) });
+    expect(parseWorkingHours('9', '9')).toMatchObject({ ok: false, field: 'end' });
   });
 });

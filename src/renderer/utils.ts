@@ -232,3 +232,15 @@ export function listCounts(state: Pick<AppState, 'tasks' | 'stars'>, showOverdue
     completed: state.tasks.filter((task) => belongsToList(task, 'completed', state.stars, reference)).length,
   };
 }
+
+export type WorkingHoursResult = { ok: true; startHour: number; endHour: number } | { ok: false; field: 'start' | 'end'; message: string };
+
+/** Validates hour drafts as a pair, so a new start can be committed together with a new end. */
+export function parseWorkingHours(startDraft: string, endDraft: string): WorkingHoursResult {
+  const startHour = Number(startDraft);
+  const endHour = Number(endDraft);
+  if (!startDraft.trim() || !Number.isInteger(startHour) || startHour < 0 || startHour > 23) return { ok: false, field: 'start', message: 'Enter a start hour from 0 to 23.' };
+  if (!endDraft.trim() || !Number.isInteger(endHour) || endHour < 1 || endHour > 24) return { ok: false, field: 'end', message: 'Enter an end hour from 1 to 24.' };
+  if (startHour >= endHour) return { ok: false, field: 'end', message: 'The end hour must be later than the start hour.' };
+  return { ok: true, startHour, endHour };
+}

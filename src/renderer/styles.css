@@ -289,6 +289,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .planning-controls { display: grid; grid-template-columns: 1fr 100px 100px; gap: 10px; margin: 12px 0; }
 .planning-controls label { display: grid; gap: 5px; color: var(--muted); font-size: 11px; }
 .planning-controls input, .manual-event input, .planning-estimate input, .breakdown-step input { border: 1px solid var(--line-strong); border-radius: 7px; padding: 8px; background: var(--surface); color: var(--text); min-width: 0; }
+.planning-controls input[aria-invalid="true"] { border-color: var(--danger); }
+.working-hours-hint { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 11px; }
+.working-hours-hint.form-error { color: var(--danger); }
 .weekday-picker { display: flex; flex-wrap: wrap; gap: 15px; }
 .weekday-picker label, .empty-calendar-choice { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
 .calendar-import { display: inline-flex; position: relative; overflow: hidden; margin: 12px 10px 8px 0; }
