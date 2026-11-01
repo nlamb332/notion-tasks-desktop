@@ -1,5 +1,5 @@
 import { DateTime, Interval } from "luxon";
-import type { AppState, CalendarEvent, OwnedBlock, PlanPlacement, PlanProposal, PlanningData, SourceProvider, Task, TaskRef } from "../shared/types";
+import { sourceProvider, type AppState, type CalendarEvent, type OwnedBlock, type PlanPlacement, type PlanProposal, type PlanningData, type SourceProvider, type Task, type TaskRef } from "../shared/types";
 import { applyPlacements, blockMoveConflict, placementConflict, refKey, taskDeadline } from "../shared/plan-placement";
 
 export { refKey };
@@ -13,7 +13,7 @@ export const DEFAULT_PLANNING: PlanningData = {
   settings: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", workdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17, allowEmptyCalendar: false },
   blocks: [], inputRevision: 0,
 };
-export function providerFor(sourceId: string, state: AppState): SourceProvider { return state.sources.find(s => s.id === sourceId)?.provider === "plane" ? "plane" : "notion"; }
+export function providerFor(sourceId: string, state: AppState): SourceProvider { return sourceProvider(state.sources.find(s => s.id === sourceId)?.provider); }
 function taskRef(task: Task, state: AppState): TaskRef { return { provider: providerFor(task.sourceId, state), sourceId: task.sourceId, taskId: task.id }; }
 function mins(start: string, end: string): number { return Math.max(0, Math.round(DateTime.fromISO(end).diff(DateTime.fromISO(start), "minutes").minutes)); }
 function conflictSeverity(blocks: OwnedBlock[], events: CalendarEvent[], now: DateTime, installationId = "", live = false): Map<string, number> {

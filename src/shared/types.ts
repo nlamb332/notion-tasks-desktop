@@ -2,10 +2,13 @@ export type TaskDate = { start: string; end: string | null; time_zone?: string |
 export const SOURCE_COLORS = ["blue", "violet", "teal", "amber", "rose"] as const;
 export type SourceColor = typeof SOURCE_COLORS[number];
 export type ThemePreference = "system" | "light" | "dark";
-export type SourceProvider = "notion" | "plane";
+export type SourceProvider = "notion" | "plane" | "jira";
+export const PROVIDER_LABELS: Record<SourceProvider, string> = { notion: "Notion", plane: "Plane", jira: "Jira" };
+export function sourceProvider(value: unknown): SourceProvider { return value === "plane" || value === "jira" ? value : "notion"; }
 export interface ConnectionConfig { provider: SourceProvider; token: string; baseUrl?: string; workspaceSlug?: string }
 export interface PlaneConnectionInput { apiKey: string; workspaceSlug: string; baseUrl?: string }
-export interface ProviderConnectionState { connected: boolean; baseUrl?: string; workspaceSlug?: string }
+export interface JiraConnectionInput { email: string; apiToken: string; siteUrl: string }
+export interface ProviderConnectionState { connected: boolean; baseUrl?: string; workspaceSlug?: string; email?: string }
 export interface TaskOwner { id: string; name: string }
 export function cleanTaskOwners(value: unknown): TaskOwner[] {
  if (!Array.isArray(value)) return [];
@@ -77,6 +80,8 @@ export interface DesktopAPI {
  connect(input: string | ConnectionConfig): Promise<AppState>;
  connectPlane(input: PlaneConnectionInput): Promise<AppState>;
  listPlaneProjects(workspaceSlug?: string, baseUrl?: string): Promise<SourceCandidate[]>;
+ connectJira(input: JiraConnectionInput): Promise<AppState>;
+ listJiraProjects(): Promise<SourceCandidate[]>;
  disconnect(provider?: SourceProvider): Promise<AppState>;
  resolveSource(url: string): Promise<SourceCandidate[]>;
  saveSource(source: SourceConfig): Promise<AppState>;

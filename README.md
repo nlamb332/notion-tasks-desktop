@@ -11,9 +11,13 @@ A personal Windows desktop task app with a full list view and compact floating w
 5. In the app, open **Settings → Connection**, enter the integration token locally, and connect.
 6. In **Settings → Sources**, paste a database or task-page link, inspect the suggested property mappings, and confirm them. Add further sources the same way.
 
+### Jira (optional)
+
+Connect a Jira Cloud site with your account email and an API token in **Settings → Connections**, then choose a project in **Settings → Sources**. Issues assigned to you share the same lists, widget, and planner. See [Jira integration](JIRA_INTEGRATION.md) for setup, sync rules, and limits.
+
 ### Plane (optional)
 
-Sources support an optional **Owner field** mapping (Plane Assignees or a Notion people property). Filter by Owner in full and compact views. Sources without an owner mapping stay visible while the filter is active.
+Sources support an optional **Owner field** mapping (Plane Assignees, Jira Assignee, or a Notion people property). Filter by Owner in full and compact views. Sources without an owner mapping stay visible while the filter is active.
 
 See [Plane integration](PLANE_INTEGRATION.md) for the architecture, local key file, and complete testing/setup steps.
 
