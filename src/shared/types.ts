@@ -46,7 +46,9 @@ export interface PlanningSettings { timezone: string; workdays: number[]; startH
 export interface BreakdownStep { name: string; estimateMinutes: number; order: number }
 export type BreakdownStepStatus = 'pending' | 'creating' | 'created' | 'failed' | 'recovery-needed';
 export interface BreakdownOperation { id: string; parent: TaskRef; steps: (BreakdownStep & { status: BreakdownStepStatus; ref?: TaskRef; message?: string })[]; status: 'in-progress' | 'complete' | 'recovery-needed'; updatedAt: string }
-export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[]; calendarSync?: CalendarSyncState }
+/** The ICS snapshot set aside while live calendars supply events. */
+export interface LocalCalendarSnapshot { events: CalendarEvent[]; importedAt: string | null; source: 'ics' | 'manual' | null }
+export interface PlanningData { tasks: TaskPlanning[]; events: CalendarEvent[]; calendarImportedAt: string | null; calendarSource: 'ics' | 'manual' | null; settings: PlanningSettings; blocks: OwnedBlock[]; inputRevision: number; operations: BreakdownOperation[]; calendarSync?: CalendarSyncState; localCalendar?: LocalCalendarSnapshot }
 export interface PlanProposal { id: string; inputRevision: number; generatedAt: string; expiresAt: string; items: { ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; moves: { blockId: string; ref: TaskRef; start: string; end: string; minutes: number; reason: string }[]; removals: { blockId: string; ref: TaskRef; reason: string }[]; unscheduled: { ref: TaskRef; reason: string; minutes: number | null }[]; capacityMinutes: number; allocatedMinutes: number }
 export interface PropertyInfo { id: string; name: string; type: string; options?: { id: string; name: string; group?: string }[] }
 export interface SourceCandidate { id: string; databaseId: string; name: string; properties: PropertyInfo[]; provider?: SourceProvider; workspaceSlug?: string; projectId?: string; baseUrl?: string }
@@ -89,6 +91,7 @@ export interface DesktopAPI {
   reconcileBreakdownStep(operationId: string, order: number, resolution: { kind: 'existing-task'; ref: TaskRef } | { kind: 'confirm-not-created' }): Promise<AppState>;
   updatePlanningSettings(settings: Partial<PlanningSettings>): Promise<AppState>;
   importCalendar(ics: string): Promise<AppState>;
+  useLocalCalendar(): Promise<AppState>;
   configureGoogleCalendar(clientJson: string): Promise<AppState>;
   openGoogleCalendarSetup(): Promise<void>;
   connectGoogleCalendar(): Promise<AppState>;

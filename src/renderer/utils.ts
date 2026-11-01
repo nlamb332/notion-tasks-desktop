@@ -1,3 +1,4 @@
+import type { PlanningData } from '../shared/types';
 import type { AppState, SourceConfig, Task, TaskDate } from '../shared/types';
 import { DateTime } from 'luxon';
 
@@ -243,4 +244,16 @@ export function parseWorkingHours(startDraft: string, endDraft: string): Working
   if (!endDraft.trim() || !Number.isInteger(endHour) || endHour < 1 || endHour > 24) return { ok: false, field: 'end', message: 'Enter an end hour from 1 to 24.' };
   if (startHour >= endHour) return { ok: false, field: 'end', message: 'The end hour must be later than the start hour.' };
   return { ok: true, startHour, endHour };
+}
+
+export type CalendarHealth = { tone: 'ok' | 'warning' | 'error'; title: string; detail: string; canResumeLive: boolean };
+
+/** Describes what planning will read from. Local data is always named, so it is never used unnoticed. */
+export function calendarHealth(planning: Pick<PlanningData, 'calendarSync' | 'calendarSource'>): CalendarHealth {
+  const sync = planning.calendarSync;
+  const selected = Boolean(sync?.selectedKeys.length);
+  if (sync?.mode === 'live' && sync.error) return { tone: 'error', title: 'Calendar connection needs attention', detail: `${sync.error} Planning is paused and is not using local data. Reconnect the calendar below, then try again.`, canResumeLive: false };
+  if (sync?.mode === 'live') return { tone: 'ok', title: '', detail: '', canResumeLive: false };
+  if (planning.calendarSource) return { tone: 'warning', title: 'Planning from local data', detail: `Using ${planning.calendarSource === 'ics' ? 'an imported ICS snapshot' : 'manual commitments'}, and approved blocks stay on this computer. Manage it in Diagnostics.`, canResumeLive: selected };
+  return { tone: 'warning', title: 'No calendar connected', detail: 'Connect Google or add a Notion database, then select a calendar to plan around. Offline options are in Diagnostics.', canResumeLive: selected };
 }

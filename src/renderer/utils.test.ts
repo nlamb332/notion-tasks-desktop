@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { SourceConfig, Task } from '../shared/types';
 import {
   autoMapping,
+  calendarHealth,
   belongsToList,
   dateInputValue,
   filterTasks,
@@ -136,6 +137,23 @@ describe('renderer date and task helpers', () => {
     expect(taskStatusTone('Not started')).toBe('planned');
     expect(taskStatusTone('Needs QA')).toBe('neutral');
     expect(taskStatusTone('Needs QA', true)).toBe('complete');
+  });
+});
+
+describe('calendarHealth', () => {
+  const sync = { calendars: [], selectedKeys: ['key'], defaultDestinationKey: null, lastSyncedAt: null, error: null, mode: 'live' as const, googleConnected: true, googleConfigured: true, installationId: '', journal: [] };
+  it('stays quiet while live calendars are healthy', () => {
+    expect(calendarHealth({ calendarSource: null, calendarSync: sync }).tone).toBe('ok');
+  });
+  it('says a failed live connection is paused rather than using local data', () => {
+    const health = calendarHealth({ calendarSource: 'ics', calendarSync: { ...sync, error: 'Token expired.' } });
+    expect(health).toMatchObject({ tone: 'error', canResumeLive: false });
+    expect(health.detail).toContain('Token expired.');
+    expect(health.detail).toContain('not using local data');
+  });
+  it('names local data and offers to resume calendars that are still selected', () => {
+    expect(calendarHealth({ calendarSource: 'ics', calendarSync: { ...sync, mode: 'local' } })).toMatchObject({ tone: 'warning', title: 'Planning from local data', canResumeLive: true });
+    expect(calendarHealth({ calendarSource: null, calendarSync: { ...sync, mode: 'local', selectedKeys: [] } })).toMatchObject({ title: 'No calendar connected', canResumeLive: false });
   });
 });
 

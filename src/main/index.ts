@@ -22,7 +22,7 @@ import { calendarKey, CalendarProviderError, type CalendarDefinition } from "../
 import { PlaneService } from "./plane";
 import { TaskCreateFailure } from "./task-create-failure";
 import { UpdateController } from "./updates";
-import { approvePlan, DEFAULT_PLANNING, exportApprovedICS, generatePlan, linkChildren, parseCalendarICS, providerFor, refKey, setEstimate } from "./planning";
+import { approvePlan, DEFAULT_PLANNING, exportApprovedICS, generatePlan, linkChildren, parseCalendarICS, providerFor, refKey, restoreLocalCalendar, setEstimate, stashLocalCalendar } from "./planning";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
 import {
   SOURCE_COLORS,
@@ -480,6 +480,7 @@ export class DesktopRuntime {
     ipcMain.handle("desktop:calendar-notion-resolve", guarded((url) => this.resolveNotionCalendar(url)));
     ipcMain.handle("desktop:calendar-notion-add", guarded((calendar) => this.addNotionCalendar(calendar)));
     ipcMain.handle("desktop:calendar-selection", guarded((selected, destination) => this.updateCalendarSelection(selected, destination)));
+    ipcMain.handle("desktop:calendar-use-local", guarded(() => this.useLocalCalendar()));
     ipcMain.handle("desktop:calendar-refresh", guarded(() => this.refreshLiveCalendars()));
     ipcMain.handle("desktop:calendar-recovery-candidates", guarded((id,index) => this.getCalendarRecoveryCandidates(id,index)));
     ipcMain.handle("desktop:calendar-reconcile-operation", guarded((id,index,resolution) => this.reconcileCalendarOperation(id,index,resolution)));
@@ -560,6 +561,10 @@ export class DesktopRuntime {
     this.state.planning={...current,events:[...parsed.events,...current.events.filter(event=>event.id.startsWith("manual-"))],calendarImportedAt:parsed.importedAt,calendarSource:"ics",calendarSync:{...current.calendarSync!,mode:"local",error:null},settings:{...current.settings,allowEmptyCalendar:false},inputRevision:current.inputRevision+1};this.persist();this.broadcast();return this.snapshot();
   }
 
+  private useLocalCalendar(): AppState {
+    this.state.planning=restoreLocalCalendar(this.planning());this.planAuthority.clear();this.persist();this.broadcast();return this.snapshot();
+  }
+
   private async configureGoogleCalendar(value: unknown): Promise<AppState> {
     if (typeof value !== "string" || value.length > 100_000) throw new TypeError("Google desktop client JSON is invalid or too large.");
     if (!this.googleOAuth) throw new Error("Google Calendar is unavailable.");
@@ -567,8 +572,8 @@ export class DesktopRuntime {
     await this.googleOAuth.configureClient(parsed);
     const sync=this.planning().calendarSync!;const oldGoogleKeys=new Set(sync.calendars.filter(calendar=>calendar.provider==="google").map(calendarKey));
     sync.calendars=sync.calendars.filter(calendar=>calendar.provider!=="google");sync.selectedKeys=sync.selectedKeys.filter(key=>!oldGoogleKeys.has(key));if(sync.defaultDestinationKey&&oldGoogleKeys.has(sync.defaultDestinationKey))sync.defaultDestinationKey=null;
-    sync.googleConfigured = true;sync.googleConnected=false;sync.error=null;sync.mode=sync.selectedKeys.length?"live":"local";
-    this.state.planning={...this.planning(),events:this.planning().events.filter(event=>event.remote?.provider!=="google"),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
+    const wasLive=sync.mode==="live";sync.googleConfigured = true;sync.googleConnected=false;sync.error=null;sync.mode=sync.selectedKeys.length?"live":"local";
+    this.state.planning={...this.planning(),...(wasLive&&sync.mode==="local"?{calendarSource:null,settings:{...this.planning().settings,allowEmptyCalendar:false}}:{}),events:this.planning().events.filter(event=>event.remote?.provider!=="google"),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
     this.persist(); this.broadcast(); return this.snapshot();
   }
 
@@ -591,12 +596,12 @@ export class DesktopRuntime {
   private async disconnectGoogleCalendar(): Promise<AppState> {
     this.googleOAuth?.cancelConnection();
     await this.googleOAuth?.disconnect(); this.googleCalendar = null;
-    const sync = this.planning().calendarSync!;
+    const sync = this.planning().calendarSync!; const wasLive=sync.mode==="live";
     const remove = new Set(sync.calendars.filter(c => c.provider === "google").map(calendarKey));
     sync.calendars = sync.calendars.filter(c => c.provider !== "google"); sync.selectedKeys = sync.selectedKeys.filter(key => !remove.has(key));
     if (sync.defaultDestinationKey && remove.has(sync.defaultDestinationKey)) sync.defaultDestinationKey = null;
     sync.googleConnected = false;
-    sync.mode=sync.selectedKeys.length?"live":"local";sync.error=null;this.state.planning={...this.planning(),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
+    sync.mode=sync.selectedKeys.length?"live":"local";sync.error=null;this.state.planning={...this.planning(),...(wasLive&&sync.mode==="local"?{calendarSource:null,settings:{...this.planning().settings,allowEmptyCalendar:false}}:{}),calendarSync:sync,inputRevision:this.planning().inputRevision+1};this.planAuthority.clear();
     this.state.planning={...this.planning(),events:this.planning().events.filter(event=>event.remote?.provider!=="google")};this.persist(); this.broadcast(); return this.snapshot();
   }
 
@@ -640,8 +645,8 @@ export class DesktopRuntime {
     if (destinationValue !== null && (!destination || !destination.canWrite)) throw new Error("Choose a writable calendar as the default destination.");
     if (destination && !selected.includes(calendarKey(destination))) selected.push(calendarKey(destination));
     sync.selectedKeys = selected; sync.defaultDestinationKey = destination ? calendarKey(destination) : null; sync.mode = selected.length ? "live" : "local"; sync.error = null;
-    const current=this.planning(); const events=sync.mode==="local"&&wasLive?current.events.filter(event=>event.id.startsWith("manual-")):current.events;
-    this.state.planning = { ...current, events, ...(sync.mode==="local"&&wasLive?{calendarImportedAt:null,calendarSource:null}:{}), calendarSync: sync, inputRevision: current.inputRevision + 1 };
+    const current=sync.mode==="live"&&!wasLive?stashLocalCalendar(this.planning()):this.planning(); const leftLive=sync.mode==="local"&&wasLive; const events=leftLive?current.events.filter(event=>event.id.startsWith("manual-")):current.events;
+    this.state.planning = { ...current, events, ...(leftLive?{calendarImportedAt:null,calendarSource:null,settings:{...current.settings,allowEmptyCalendar:false}}:{}), calendarSync: sync, inputRevision: current.inputRevision + 1 };
     this.planAuthority.clear();
     this.persist(); this.broadcast(); return this.snapshot();
   }

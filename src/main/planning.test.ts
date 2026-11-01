@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
 import type { AppState, TaskRef } from "../shared/types";
-import { approvePlan, cleanPlanning, DEFAULT_PLANNING as SYSTEM_DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, rollup, setEstimate } from "./planning";
+import { approvePlan, cleanPlanning, DEFAULT_PLANNING as SYSTEM_DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, restoreLocalCalendar, rollup, setEstimate, stashLocalCalendar } from "./planning";
 
 const DEFAULT_PLANNING = { ...SYSTEM_DEFAULT_PLANNING, settings: { ...SYSTEM_DEFAULT_PLANNING.settings, timezone: "America/Chicago" } };
 
@@ -52,6 +52,24 @@ describe("rolling calendar planning",()=>{
     const s=state([task("a")]);const d={...setEstimate(DEFAULT_PLANNING,ref("a"),30),calendarImportedAt:"manual",calendarSource:"manual" as const,events:[{id:"manual",title:"Appointment",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"}]};
     expect(()=>generatePlan(d,s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"))).toThrow(/complete/i);
     expect(generatePlan({...d,settings:{...d.settings,allowEmptyCalendar:true}},s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago")).items).toHaveLength(1);
+  });
+  it("sets an ICS snapshot aside while live and restores it only through the explicit switch",()=>{
+    const sync={...DEFAULT_PLANNING.calendarSync!,selectedKeys:["key"],defaultDestinationKey:"key"};
+    const ics={id:"uid",title:"Dentist",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"},manual={id:"manual-1",title:"Lunch",start:"2026-11-03T15:00:00Z",end:"2026-11-03T16:00:00Z"};
+    const local={...DEFAULT_PLANNING,events:[ics,manual],calendarSource:"ics" as const,calendarImportedAt:"2026-11-01T00:00:00Z",calendarSync:sync};
+    const stashed=stashLocalCalendar(local);expect(stashed.localCalendar).toEqual({events:[ics],importedAt:"2026-11-01T00:00:00Z",source:"ics"});
+    const live={...stashed,events:[manual,{id:"google:a",title:"Live",start:"2026-11-04T15:00:00Z",end:"2026-11-04T16:00:00Z"}],calendarSource:null,calendarSync:{...sync,mode:"live" as const}};
+    expect(cleanPlanning(JSON.parse(JSON.stringify(live))).localCalendar?.events).toEqual([ics]);
+    const restored=restoreLocalCalendar({...live,settings:{...live.settings,allowEmptyCalendar:true}});
+    expect(restored.events.map(x=>x.id)).toEqual(["uid","manual-1"]);expect(restored).toMatchObject({calendarSource:"ics",calendarImportedAt:"2026-11-01T00:00:00Z",settings:{allowEmptyCalendar:false},calendarSync:{mode:"local",selectedKeys:[],defaultDestinationKey:null}});
+  });
+  it("keeps current local events when the explicit switch runs outside live mode",()=>{
+    const ics={id:"uid",title:"Dentist",start:"2026-11-02T15:00:00Z",end:"2026-11-02T16:00:00Z"};
+    expect(restoreLocalCalendar({...DEFAULT_PLANNING,events:[ics],calendarSource:"ics",calendarImportedAt:"2026-11-01T00:00:00Z"})).toMatchObject({events:[ics],calendarSource:"ics"});
+  });
+  it("keeps planning paused instead of using local data after a live refresh failure",()=>{
+    const s=state([task("a")]);const d={...setEstimate(DEFAULT_PLANNING,ref("a"),30),calendarSource:"ics" as const,localCalendar:{events:[],importedAt:"snapshot",source:"ics" as const},calendarSync:{...DEFAULT_PLANNING.calendarSync!,mode:"live" as const,lastSyncedAt:"2026-11-02T13:00:00Z",error:"Google sign-in expired."}};
+    expect(()=>generatePlan(d,s,DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago"))).toThrow("Google sign-in expired.");
   });
   it("rejects recurrence without replacing the prior snapshot",()=>{
     const ics="BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:a\r\nDTSTART:20261102T150000Z\r\nDTEND:20261102T160000Z\r\nRRULE:FREQ=WEEKLY\r\nEND:VEVENT\r\nEND:VCALENDAR";

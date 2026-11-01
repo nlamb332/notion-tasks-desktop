@@ -452,6 +452,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .calendar-destination select { width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); color: var(--text); font: inherit; }
 .calendar-selection-help { display: block; margin-bottom: 20px; color: var(--muted); line-height: 1.6; }
 .calendar-connection-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0; }
+.calendar-health { display: grid; gap: 4px; margin: 12px 0; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--blue-soft); font-size: 12px; }
+.calendar-health.error { border-color: var(--danger); }
+.calendar-health .calendar-connection-actions { margin: 6px 0 0; align-items: center; }
+.diagnostics-facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 12px; font-size: 12px; }
+.diagnostics-facts dt { color: var(--muted); }
+.diagnostics-facts dd { margin: 0; overflow-wrap: anywhere; }
 .calendar-setup-status { padding: 12px 14px; border-radius: 8px; background: var(--blue-soft); color: var(--text); }
 .calendar-setup-panel, .notion-database-option { margin: 16px 0; border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
 .calendar-setup-panel summary, .notion-database-option summary { cursor: pointer; font-size: 13px; font-weight: 600; }
