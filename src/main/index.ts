@@ -22,6 +22,7 @@ import { calendarKey, CalendarProviderError, type CalendarDefinition } from "../
 import { PlaneService } from "./plane";
 import { TaskCreateFailure } from "./task-create-failure";
 import { UpdateController } from "./updates";
+import { applyPlacements } from "../shared/plan-placement";
 import { approvePlan, DEFAULT_PLANNING, exportApprovedICS, generatePlan, linkChildren, parseCalendarICS, providerFor, refKey, restoreLocalCalendar, setEstimate, stashLocalCalendar } from "./planning";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
 import {
@@ -44,6 +45,7 @@ import {
   type ThemePreference,
   type UpdateResult,
   type PlanningSettings,
+  type PlanPlacement,
   type PlanningData,
   type TaskRef,
   type PlanProposal,
@@ -485,7 +487,7 @@ export class DesktopRuntime {
     ipcMain.handle("desktop:calendar-recovery-candidates", guarded((id,index) => this.getCalendarRecoveryCandidates(id,index)));
     ipcMain.handle("desktop:calendar-reconcile-operation", guarded((id,index,resolution) => this.reconcileCalendarOperation(id,index,resolution)));
     ipcMain.handle("desktop:plan-generate", guarded(() => this.generatePlanning()));
-    ipcMain.handle("desktop:plan-approve", guarded((proposal, selected) => this.approvePlanning(proposal, selected)));
+    ipcMain.handle("desktop:plan-approve", guarded((proposal, selected, placements) => this.approvePlanning(proposal, selected, placements)));
     ipcMain.handle("desktop:calendar-export", guarded(() => exportApprovedICS(this.planning().blocks, this.state)));
     ipcMain.handle(CHANNELS.openNotion, guarded((id) => this.openNotion(id)));
   }
@@ -688,15 +690,16 @@ export class DesktopRuntime {
     if(!isRecord(value)||typeof value.title!=="string"||!value.title.trim()||typeof value.start!=="string"||typeof value.end!=="string")throw new TypeError("Calendar event is invalid.");const start=DateTime.fromISO(value.start),end=DateTime.fromISO(value.end);if(!start.isValid||!end.isValid||end<=start)throw new TypeError("Calendar event needs a valid end after its start.");const current=this.planning();
     this.state.planning={...current,events:[...current.events,{id:`manual-${Date.now()}`,title:value.title.trim(),start:start.toUTC().toISO()!,end:end.toUTC().toISO()!}],calendarImportedAt:current.calendarImportedAt??new Date().toISOString(),calendarSource:current.calendarSource??"manual",inputRevision:current.inputRevision+1};this.persist();this.broadcast();return this.snapshot();
   }
-  private async approvePlanning(proposalValue: unknown, selectedValue: unknown): Promise<AppState> {
+  private async approvePlanning(proposalValue: unknown, selectedValue: unknown, placementsValue: unknown = []): Promise<AppState> {
     if (this.approvalActive) throw new Error("Another calendar approval is still being saved. Wait for it to finish.");
     this.approvalActive = true;
-    try { return await this.performPlanningApproval(proposalValue, selectedValue); }
+    try { return await this.performPlanningApproval(proposalValue, selectedValue, placementsValue); }
     finally { this.approvalActive = false; }
   }
 
-  private async performPlanningApproval(proposalValue: unknown, selectedValue: unknown): Promise<AppState> {
-    if(!isRecord(proposalValue)||typeof proposalValue.id!=="string"||!Array.isArray(selectedValue)||selectedValue.some(x=>typeof x!=="string"))throw new TypeError("Plan approval is invalid.");
+  private async performPlanningApproval(proposalValue: unknown, selectedValue: unknown, placementsValue: unknown): Promise<AppState> {
+    if(!isRecord(proposalValue)||typeof proposalValue.id!=="string"||!Array.isArray(selectedValue)||selectedValue.some(x=>typeof x!=="string")||!Array.isArray(placementsValue)||placementsValue.some(x=>!isRecord(x)||typeof x.key!=="string"||typeof x.start!=="string"))throw new TypeError("Plan approval is invalid.");
+    const placements=placementsValue as PlanPlacement[];
     const proposal = this.planAuthority.get(proposalValue.id);
     if (!proposal) throw new Error("This plan is no longer available. Generate a fresh review before approving.");
     this.assertNoUnresolvedCalendarCreate();
@@ -706,14 +709,15 @@ export class DesktopRuntime {
     const fresh = generatePlan(current, this.state, DateTime.fromISO(proposal.generatedAt).setZone(current.settings.timezone));
     const same = JSON.stringify([fresh.items.map(x=>[refKey(x.ref),x.start,x.end]),fresh.moves.map(x=>[x.blockId,x.start,x.end]),fresh.removals.map(x=>[x.blockId,x.reason])]) === JSON.stringify([proposal.items.map(x=>[refKey(x.ref),x.start,x.end]),proposal.moves.map(x=>[x.blockId,x.start,x.end]),proposal.removals.map(x=>[x.blockId,x.reason])]);
     if (!same) throw new Error("Calendar availability changed. Generate a fresh review before approving.");
-    const desired = approvePlan(current, this.state, proposal, selectedValue as string[], now);
+    const desired = approvePlan(current, this.state, proposal, selectedValue as string[], now, placements);
+    const placed = applyPlacements(proposal, placements);
     const sync = current.calendarSync!;
     if (sync.mode !== "live") { this.state.planning = desired; this.persist(); this.broadcast(); this.planAuthority.delete(proposal.id); return this.snapshot(); }
     const chosen = new Set(selectedValue as string[]);
     const operationId = randomUUID();
     const steps: NonNullable<typeof sync.journal>[number]["steps"] = [];
     const destination = sync.calendars.find(calendar => calendarKey(calendar) === sync.defaultDestinationKey);
-    for (const item of proposal.items) {
+    for (const item of placed.items) {
       if (!chosen.has(refKey(item.ref))) continue;
       if (!destination?.canWrite) throw new Error("Choose a writable default destination before approving new task blocks.");
       const block = desired.blocks.find(b => b.ref.taskId===item.ref.taskId&&b.ref.sourceId===item.ref.sourceId&&b.start===item.start&&b.end===item.end&&!current.blocks.some(old=>old.id===b.id));
@@ -721,7 +725,7 @@ export class DesktopRuntime {
       const task = this.state.tasks.find(t=>t.id===item.ref.taskId&&t.sourceId===item.ref.sourceId);
       steps.push({ kind:"create", blockId:block.id, status:"pending", calendarKey:calendarKey(destination), taskRef:item.ref, title:task?.name||"Planned task", start:item.start, end:item.end });
     }
-    for (const move of proposal.moves) if (move.start && chosen.has(`move:${move.blockId}`)) {
+    for (const move of placed.moves) if (move.start && chosen.has(`move:${move.blockId}`)) {
       const block=current.blocks.find(b=>b.id===move.blockId); if (block?.remote) steps.push({kind:"update",blockId:block.id,status:"pending",remote:block.remote,title:this.state.tasks.find(t=>t.id===block.ref.taskId&&t.sourceId===block.ref.sourceId)?.name||"Planned task",start:move.start,end:move.end,expectedVersion:block.remote.version});
     }
     for (const removal of proposal.removals) if (chosen.has(`remove:${removal.blockId}`)) {

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { SOURCE_COLORS, type AppState, type AppUpdateState, type BreakdownStep, type CalendarEvent, type ConnectionConfig, type DesktopAPI, type PlanProposal, type PlaneConnectionInput, type PlanningSettings, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type TaskRef, type UpdateResult } from "./shared/types";
+import { SOURCE_COLORS, type AppState, type AppUpdateState, type BreakdownStep, type CalendarEvent, type ConnectionConfig, type DesktopAPI, type PlanPlacement, PlanProposal, type PlaneConnectionInput, type PlanningSettings, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type TaskRef, type UpdateResult } from "./shared/types";
 
 const channels = {
   getState: "desktop:get-state",
@@ -127,7 +127,7 @@ const desktop: DesktopAPI = {
   reconcileCalendarOperation: (operationId, stepIndex, resolution) => ipcRenderer.invoke("desktop:calendar-reconcile-operation", ensureString(operationId,"operationId"), stepIndex, resolution),
   addCalendarEvent: (event: Omit<CalendarEvent, "id">) => ipcRenderer.invoke(channels.calendarAdd, event),
   generatePlan: (): Promise<PlanProposal> => ipcRenderer.invoke(channels.planGenerate),
-  approvePlan: (proposal: PlanProposal, selected: string[]) => ipcRenderer.invoke(channels.planApprove, proposal, selected),
+  approvePlan: (proposal: PlanProposal, selected: string[], placements: PlanPlacement[] = []) => ipcRenderer.invoke(channels.planApprove, proposal, selected, placements),
   exportCalendar: (): Promise<string> => ipcRenderer.invoke(channels.calendarExport),
   openNotion: (id) => ipcRenderer.invoke(channels.openNotion, ensureString(id, "id")),
   onState: (callback) => {

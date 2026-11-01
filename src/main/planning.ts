@@ -1,5 +1,8 @@
 import { DateTime, Interval } from "luxon";
-import type { AppState, CalendarEvent, OwnedBlock, PlanProposal, PlanningData, SourceProvider, Task, TaskRef } from "../shared/types";
+import type { AppState, CalendarEvent, OwnedBlock, PlanPlacement, PlanProposal, PlanningData, SourceProvider, Task, TaskRef } from "../shared/types";
+import { applyPlacements, placementConflict, refKey, taskDeadline } from "../shared/plan-placement";
+
+export { refKey };
 
 export const MAX_ESTIMATE_MINUTES = 100_000;
 export const PLAN_REVIEW_BUFFER_MINUTES = 5;
@@ -10,7 +13,6 @@ export const DEFAULT_PLANNING: PlanningData = {
   settings: { timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC", workdays: [1, 2, 3, 4, 5], startHour: 9, endHour: 17, allowEmptyCalendar: false },
   blocks: [], inputRevision: 0,
 };
-export function refKey(ref: TaskRef): string { return JSON.stringify([ref.provider, ref.sourceId, ref.taskId]); }
 export function providerFor(sourceId: string, state: AppState): SourceProvider { return state.sources.find(s => s.id === sourceId)?.provider === "plane" ? "plane" : "notion"; }
 function taskRef(task: Task, state: AppState): TaskRef { return { provider: providerFor(task.sourceId, state), sourceId: task.sourceId, taskId: task.id }; }
 function mins(start: string, end: string): number { return Math.max(0, Math.round(DateTime.fromISO(end).diff(DateTime.fromISO(start), "minutes").minutes)); }
@@ -22,11 +24,6 @@ function conflictSeverity(blocks: OwnedBlock[], events: CalendarEvent[], now: Da
   return conflicts;
 }
 function validZone(zone: string): boolean { return DateTime.now().setZone(zone).isValid; }
-function taskDeadline(task: Task | undefined, timezone: string): DateTime | null {
-  const raw=task?.due?.end??task?.due?.start;if(!raw)return null;
-  const dt=DateTime.fromISO(raw,{zone:task?.due?.time_zone||timezone});if(!dt.isValid)return null;
-  return /^\d{4}-\d\d-\d\d$/.test(raw)?dt.endOf("day"):dt;
-}
 
 export function cleanPlanning(value: unknown): PlanningData {
   const d = value && typeof value === "object" ? value as Partial<PlanningData> : {};
@@ -148,10 +145,11 @@ export function generatePlan(data: PlanningData, state: AppState, now = DateTime
   return {id:`plan-${Date.now()}-${data.inputRevision}`,inputRevision:data.inputRevision,generatedAt:now.toUTC().toISO()!,expiresAt:now.plus({minutes:PLAN_REVIEW_TTL_MINUTES}).toUTC().toISO()!,items,moves,removals,unscheduled,capacityMinutes:totalCapacityMinutes,allocatedMinutes:allocatedMinutes+moves.filter(m=>m.start).reduce((n,m)=>n+m.minutes,0)};
 }
 
-export function approvePlan(data: PlanningData, state: AppState, proposal: PlanProposal, selected: string[], approvalNow = DateTime.now().setZone(data.settings.timezone)): PlanningData {
+export function approvePlan(data: PlanningData, state: AppState, proposal: PlanProposal, selected: string[], approvalNow = DateTime.now().setZone(data.settings.timezone), placements: PlanPlacement[] = []): PlanningData {
+  const placed=applyPlacements(proposal,placements);
   const validSelections=new Set([...proposal.items.map(x=>refKey(x.ref)),...proposal.moves.filter(x=>x.start).map(x=>`move:${x.blockId}`),...proposal.removals.map(x=>`remove:${x.blockId}`)]);
   if(new Set(selected).size!==selected.length||selected.some(key=>!validSelections.has(key)))throw new Error("The selected plan changes are invalid. Review the current proposal and try again.");
-  const chosen=new Set(selected); const requested=proposal.items.filter(x=>chosen.has(refKey(x.ref))); const requestedMoves=proposal.moves.filter(x=>x.start&&chosen.has(`move:${x.blockId}`)); const requestedRemovals=proposal.removals.filter(x=>chosen.has(`remove:${x.blockId}`));
+  const chosen=new Set(selected); const requested=placed.items.filter(x=>chosen.has(refKey(x.ref))); const requestedMoves=placed.moves.filter(x=>x.start&&chosen.has(`move:${x.blockId}`)); const requestedRemovals=proposal.removals.filter(x=>chosen.has(`remove:${x.blockId}`));
   const requestedIds=requested.map(x=>`${proposal.id}-${encodeURIComponent(refKey(x.ref))}-${DateTime.fromISO(x.start).toMillis()}`);
   if((requestedIds.length+requestedRemovals.length+requestedMoves.length)>0&&requestedIds.every(id=>data.blocks.some(b=>b.id===id))&&requestedRemovals.every(r=>!data.blocks.some(b=>b.id===r.blockId))&&requestedMoves.every(m=>data.blocks.some(b=>b.id===m.blockId&&b.start===m.start&&b.end===m.end)))return data;
   if(proposal.inputRevision!==data.inputRevision) throw new Error("This plan is stale. Generate a fresh review before approving.");
@@ -159,6 +157,7 @@ export function approvePlan(data: PlanningData, state: AppState, proposal: PlanP
   const expiresAt=DateTime.fromISO(proposal.expiresAt).toUTC();
   if(!expiresAt.isValid||approvalNow.toUTC()>expiresAt||generatedAt.startOf("day").toMillis()!==approvalNow.setZone(data.settings.timezone).startOf("day").toMillis()||requested.some(x=>DateTime.fromISO(x.start)<=approvalNow.toUTC())||requestedMoves.some(x=>DateTime.fromISO(x.start)<=approvalNow.toUTC())||requestedRemovals.some(x=>{const block=data.blocks.find(b=>b.id===x.blockId);return !block||DateTime.fromISO(block.start)<=approvalNow.toUTC();}))throw new Error("This plan is stale because its review window expired, time passed, or the local date changed. Generate a fresh review.");
   const fresh=generatePlan(data,state,generatedAt); if(fresh.items.length!==proposal.items.length || fresh.items.some((item,i)=>refKey(item.ref)!==refKey(proposal.items[i]?.ref)||item.start!==proposal.items[i]?.start||item.end!==proposal.items[i]?.end)||fresh.moves.length!==proposal.moves.length||fresh.moves.some((item,i)=>item.blockId!==proposal.moves[i]?.blockId||item.start!==proposal.moves[i]?.start||item.end!==proposal.moves[i]?.end)||fresh.removals.length!==proposal.removals.length||fresh.removals.some((item,i)=>item.blockId!==proposal.removals[i]?.blockId||item.reason!==proposal.removals[i]?.reason)) throw new Error("Planning inputs changed. Generate a fresh review before approving.");
+  for(const placement of placements){if(!chosen.has(placement.key))continue;const conflict=placementConflict(placement.key,{data,tasks:state.tasks,proposal:placed,selected,now:approvalNow});if(conflict)throw new Error(`A moved block no longer fits: ${conflict}`);}
   const additions=requested.map(x=>({id:`${proposal.id}-${encodeURIComponent(refKey(x.ref))}-${DateTime.fromISO(x.start).toMillis()}`,ref:x.ref,start:x.start,end:x.end,approvedAt:new Date().toISOString()}));
   const removed=new Set([...requestedRemovals.map(x=>x.blockId),...requestedMoves.map(x=>x.blockId)]);
   const moved:OwnedBlock[]=requestedMoves.map(m=>({id:m.blockId,ref:m.ref,start:m.start,end:m.end,approvedAt:new Date().toISOString()}));
