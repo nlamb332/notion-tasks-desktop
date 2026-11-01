@@ -1,6 +1,6 @@
 import { DateTime, Interval } from "luxon";
 import type { AppState, CalendarEvent, OwnedBlock, PlanPlacement, PlanProposal, PlanningData, SourceProvider, Task, TaskRef } from "../shared/types";
-import { applyPlacements, placementConflict, refKey, taskDeadline } from "../shared/plan-placement";
+import { applyPlacements, blockMoveConflict, placementConflict, refKey, taskDeadline } from "../shared/plan-placement";
 
 export { refKey };
 
@@ -180,6 +180,14 @@ export function approvePlan(data: PlanningData, state: AppState, proposal: PlanP
     }
   }
   return { ...data, blocks };
+}
+
+/** Moves one approved block, keeping its duration, task, and calendar link. Any open draft becomes stale. */
+export function moveBlock(data: PlanningData, state: AppState, blockId: string, start: string, now = DateTime.now().setZone(data.settings.timezone)): PlanningData {
+  const conflict=blockMoveConflict(blockId,start,{data,tasks:state.tasks,now});if(conflict)throw new Error(conflict);
+  const utc=DateTime.fromISO(start).toUTC();
+  const blocks=data.blocks.map(block=>block.id===blockId?{...block,start:utc.toISO()!,end:utc.plus({minutes:mins(block.start,block.end)}).toISO()!}:block);
+  return {...data,blocks,events:data.events.filter(event=>event.id!==`${blockId}@notion-tasks.local`),inputRevision:data.inputRevision+1};
 }
 
 function unfold(text:string):string[] { return text.replace(/\r?\n[ \t]/g,"").split(/\r?\n/); }

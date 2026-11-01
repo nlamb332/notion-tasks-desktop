@@ -128,6 +128,7 @@ const desktop: DesktopAPI = {
   addCalendarEvent: (event: Omit<CalendarEvent, "id">) => ipcRenderer.invoke(channels.calendarAdd, event),
   generatePlan: (): Promise<PlanProposal> => ipcRenderer.invoke(channels.planGenerate),
   approvePlan: (proposal: PlanProposal, selected: string[], placements: PlanPlacement[] = []) => ipcRenderer.invoke(channels.planApprove, proposal, selected, placements),
+  moveBlock: (blockId: string, start: string) => ipcRenderer.invoke("desktop:plan-move-block", ensureString(blockId, "blockId"), ensureString(start, "start")),
   exportCalendar: (): Promise<string> => ipcRenderer.invoke(channels.calendarExport),
   openNotion: (id) => ipcRenderer.invoke(channels.openNotion, ensureString(id, "id")),
   onState: (callback) => {

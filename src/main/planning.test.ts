@@ -2,13 +2,51 @@ import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
 import type { AppState, PlanningData, TaskRef } from "../shared/types";
 import { applyPlacements, fixedEvents, placementConflict } from "../shared/plan-placement";
-import { approvePlan, cleanPlanning, DEFAULT_PLANNING as SYSTEM_DEFAULT_PLANNING, generatePlan, linkChildren, parseCalendarICS, restoreLocalCalendar, rollup, setEstimate, stashLocalCalendar } from "./planning";
+import { approvePlan, cleanPlanning, DEFAULT_PLANNING as SYSTEM_DEFAULT_PLANNING, generatePlan, linkChildren, moveBlock, parseCalendarICS, restoreLocalCalendar, rollup, setEstimate, stashLocalCalendar } from "./planning";
 
 const DEFAULT_PLANNING = { ...SYSTEM_DEFAULT_PLANNING, settings: { ...SYSTEM_DEFAULT_PLANNING.settings, timezone: "America/Chicago" } };
 
 const ref=(taskId:string):TaskRef=>({provider:"notion",sourceId:"db",taskId});
 function state(tasks:AppState["tasks"]):AppState{return {connected:true,sources:[{id:"db",databaseId:"db",name:"Tasks",properties:[],mapping:{title:"t",due:null,status:"s",complete:"Done",reopen:"Todo"}}],tasks,stars:[],settings:{compact:false,alwaysOnTop:false,launchAtLogin:false,selectedList:"all",lastSourceId:"db"},sync:{syncing:false,lastSync:null,errors:{},onlineSources:["db"]},planning:{...DEFAULT_PLANNING,settings:{...DEFAULT_PLANNING.settings,timezone:"America/Chicago"}}};}
 const task=(id:string,completed=false,due:AppState["tasks"][number]["due"]=null):AppState["tasks"][number]=>({id,sourceId:"db",name:id,url:"",due,status:completed?"Done":"Todo",completed,lastEdited:"2026-01-01T00:00:00.000Z"});
+
+describe("moving approved blocks",()=>{
+  const now=DateTime.fromISO("2026-11-02T14:00:00Z").setZone("America/Chicago");
+  const block=(id:string,taskId:string,start:string,end:string,remote?:PlanningData["blocks"][number]["remote"])=>({id,ref:ref(taskId),start,end,approvedAt:"2026-11-01T00:00:00.000Z",...(remote?{remote}:{})});
+  const base=(blocks:PlanningData["blocks"],extra:Partial<PlanningData>={}):PlanningData=>({...DEFAULT_PLANNING,blocks,calendarSource:"ics",...extra});
+  it("keeps the duration, task, and calendar link, and invalidates open drafts",()=>{
+    const remote={provider:"google" as const,accountId:"a",calendarId:"c",eventId:"e",version:"1"};
+    const d=base([block("b","a","2026-11-03T15:00:00.000Z","2026-11-03T15:45:00.000Z",remote)],{calendarSync:{...DEFAULT_PLANNING.calendarSync!,mode:"live"}});
+    const next=moveBlock(d,state([task("a")]),"b","2026-11-04T16:00:00.000Z",now);
+    expect(next.blocks[0]).toMatchObject({start:"2026-11-04T16:00:00.000Z",end:"2026-11-04T16:45:00.000Z",ref:ref("a"),remote});
+    expect(next.inputRevision).toBe(d.inputRevision+1);
+  });
+  it("uses the same rules as proposed blocks",()=>{
+    const d=base([block("b","a","2026-11-03T15:00:00.000Z","2026-11-03T16:00:00.000Z"),block("other","c","2026-11-03T18:00:00.000Z","2026-11-03T19:00:00.000Z")],{events:[{id:"meeting",title:"Meeting",start:"2026-11-04T16:00:00.000Z",end:"2026-11-04T17:00:00.000Z"}]});
+    const s=state([task("a"),task("c")]);
+    expect(()=>moveBlock(d,s,"b","2026-11-04T16:30:00.000Z",now)).toThrow("overlaps Meeting");
+    expect(()=>moveBlock(d,s,"b","2026-11-03T18:30:00.000Z",now)).toThrow("approved block for c");
+    expect(()=>moveBlock(d,s,"b","2026-11-07T16:00:00.000Z",now)).toThrow("not a working day");
+    expect(()=>moveBlock(d,s,"b","2026-11-03T15:15:00.000Z",now).blocks[0].start).not.toThrow();
+    const due=state([task("a",false,{start:"2026-11-03",end:null}),task("c")]);
+    expect(()=>moveBlock(d,due,"b","2026-11-04T16:00:00.000Z",now)).toThrow("deadline");
+  });
+  it("refuses started blocks, closed tasks, and linked blocks without a live calendar",()=>{
+    const s=state([task("a"),task("done",true)]);
+    expect(()=>moveBlock(base([block("b","a","2026-11-02T13:00:00.000Z","2026-11-02T15:00:00.000Z")]),s,"b","2026-11-03T16:00:00.000Z",now)).toThrow("already started");
+    expect(()=>moveBlock(base([block("b","done","2026-11-03T15:00:00.000Z","2026-11-03T16:00:00.000Z")]),s,"b","2026-11-03T16:00:00.000Z",now)).toThrow("completed");
+    expect(()=>moveBlock(base([block("b","gone","2026-11-03T15:00:00.000Z","2026-11-03T16:00:00.000Z")]),s,"b","2026-11-03T16:00:00.000Z",now)).toThrow("unavailable");
+    expect(()=>moveBlock(base([block("b","a","2026-11-03T15:00:00.000Z","2026-11-03T16:00:00.000Z",{provider:"google",accountId:"a",calendarId:"c",eventId:"e",version:"1"})]),s,"b","2026-11-03T16:00:00.000Z",now)).toThrow("Reconnect");
+    expect(()=>moveBlock(base([]),s,"missing","2026-11-03T16:00:00.000Z",now)).toThrow("no longer available");
+  });
+  it("keeps breakdown steps in order",()=>{
+    const s=state([task("parent"),task("one"),task("two")]);
+    const linked=linkChildren(DEFAULT_PLANNING,ref("parent"),[{ref:ref("one"),estimateMinutes:60,order:0},{ref:ref("two"),estimateMinutes:60,order:1}]);
+    const d={...linked,calendarSource:"ics" as const,blocks:[block("first","one","2026-11-03T16:00:00.000Z","2026-11-03T17:00:00.000Z"),block("second","two","2026-11-03T18:00:00.000Z","2026-11-03T19:00:00.000Z")]};
+    expect(()=>moveBlock(d,s,"first","2026-11-03T20:00:00.000Z",now)).toThrow("must finish before two");
+    expect(()=>moveBlock(d,s,"second","2026-11-03T15:00:00.000Z",now)).toThrow("one must finish first");
+  });
+});
 
 describe("rolling calendar planning",()=>{
   it("uses the configured planning timezone regardless of the injected clock's zone",()=>{

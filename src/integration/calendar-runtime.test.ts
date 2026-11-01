@@ -62,6 +62,49 @@ describe("DesktopRuntime live calendar transaction boundary", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date("2026-10-30T08:00:00.000Z")); });
   afterEach(() => { vi.useRealTimers(); });
 
+  describe("moving an approved block", () => {
+    const ownership = { installationId: "installation-1", blockId: "block-1", operationId: "op-1" };
+    const bound = (planning: Partial<PlanningData> = {}) => makeState([task("task-1", "Write report")], { blocks: [{ id: "block-1", ref: ref("task-1"), start: "2026-10-30T10:00:00.000Z", end: "2026-10-30T11:00:00.000Z", approvedAt: "2026-10-29T12:00:00.000Z", remote: { provider: "google", accountId: "g-account", calendarId: "g-cal", eventId: "owned", version: "version-owned" } }], ...planning });
+    const owned = remoteEvent(google, "owned", "Write report", "2026-10-30T10:00:00.000Z", "2026-10-30T11:00:00.000Z", ownership);
+
+    it("updates the linked event with its read-back version and keeps the duration", async () => {
+      const g = emptyClient({ readEvents: vi.fn(async () => [owned]), getEvent: vi.fn(async () => owned), updateEvent: vi.fn(async (_cal, _id, input) => ({ ...remoteEvent(google, "owned", input.title, input.start, input.end, ownership), version: "version-2" })) });
+      const runtime = runtimeWith(bound(), { google: g, notion: emptyClient() });
+      await runtime.moveApprovedBlock("block-1", "2026-10-30T13:00:00.000Z");
+      expect(g.updateEvent.mock.calls[0]).toEqual([google, "owned", expect.objectContaining({ blockId: "block-1", title: "Write report", start: "2026-10-30T13:00:00.000Z", end: "2026-10-30T14:00:00.000Z" }), "version-owned"]);
+      expect(runtime.state.planning.blocks[0]).toMatchObject({ start: "2026-10-30T13:00:00.000Z", end: "2026-10-30T14:00:00.000Z", remote: { version: "version-2" } });
+    });
+
+    it("rejects a time taken by an event found on the fresh read, without writing", async () => {
+      const busy = remoteEvent(google, "new-meeting", "New meeting", "2026-10-30T13:00:00.000Z", "2026-10-30T14:00:00.000Z");
+      const g = emptyClient({ readEvents: vi.fn(async () => [owned, busy]), getEvent: vi.fn(async () => owned) });
+      const runtime = runtimeWith(bound(), { google: g, notion: emptyClient() });
+      await expect(runtime.moveApprovedBlock("block-1", "2026-10-30T13:00:00.000Z")).rejects.toThrow("overlaps New meeting");
+      expect(g.updateEvent).not.toHaveBeenCalled();
+    });
+
+    it("keeps the block in place when the calendar rejects the write", async () => {
+      const g = emptyClient({ readEvents: vi.fn(async () => [owned]), getEvent: vi.fn(async () => owned), updateEvent: vi.fn(async () => { throw new CalendarProviderError("The event changed.", "conflict"); }) });
+      const runtime = runtimeWith(bound(), { google: g, notion: emptyClient() });
+      await expect(runtime.moveApprovedBlock("block-1", "2026-10-30T13:00:00.000Z")).rejects.toThrow("was not moved");
+      expect(runtime.state.planning.blocks[0].start).toBe("2026-10-30T10:00:00.000Z");
+    });
+
+    it("reads the calendar back after an uncertain write", async () => {
+      const landed = { ...owned, start: "2026-10-30T13:00:00.000Z", end: "2026-10-30T14:00:00.000Z", version: "version-2" };
+      const g = emptyClient({ readEvents: vi.fn(async () => [owned]), getEvent: vi.fn(async () => owned), updateEvent: vi.fn(async () => { g.getEvent.mockImplementation(async () => landed); throw new CalendarProviderError("The connection dropped.", "unknown-write"); }) });
+      const runtime = runtimeWith(bound(), { google: g, notion: emptyClient() });
+      await expect(runtime.moveApprovedBlock("block-1", "2026-10-30T13:00:00.000Z")).rejects.toThrow("may have saved");
+      expect(runtime.state.planning.blocks[0]).toMatchObject({ start: "2026-10-30T13:00:00.000Z", remote: { version: "version-2" } });
+    });
+
+    it("waits for a running approval", async () => {
+      const runtime = runtimeWith(bound(), { google: emptyClient(), notion: emptyClient() });
+      runtime.approvalActive = true;
+      await expect(runtime.moveApprovedBlock("block-1", "2026-10-30T13:00:00.000Z")).rejects.toThrow("still being saved");
+    });
+  });
+
   it("unions busy events from both providers, creates only in the default destination, and does not write during generation", async () => {
     const gBusy = remoteEvent(google, "g-busy", "Focus", "2026-10-30T09:00:00Z", "2026-10-30T10:00:00Z");
     const nBusy = remoteEvent(notion, "n-busy", "Review", "2026-10-30T10:00:00Z", "2026-10-30T11:00:00Z");

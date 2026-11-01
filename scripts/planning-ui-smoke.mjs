@@ -110,6 +110,21 @@ try {
   assert.equal(new Date(report.end)-new Date(report.start),3600000);
   assert.equal(new Date(report.start).toLocaleDateString(undefined,{timeZone:zone}),lastDate);
 
+  // Approved blocks move only after Save move; calendar events cannot be dragged.
+  assert.equal(await page.locator('button.plan-block.event').count(),0);
+  const approvedBlock=name=>page.getByRole('button',{name:new RegExp('^(Approved|Unsaved move): '+name)});
+  await approvedBlock('Write report').scrollIntoViewIfNeeded();
+  await approvedBlock('Write report').focus();await page.keyboard.press('ArrowUp');
+  await page.getByRole('button',{name:'Save move',exact:true}).waitFor();
+  assert.equal((await blocks()).find(b=>b.id===report.id).start,report.start);
+  await page.getByRole('button',{name:'Cancel',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'Save move',exact:true}).count(),0);
+  await approvedBlock('Write report').dragTo(lastDay,{targetPosition:{x:30,y:40}});
+  await page.getByRole('button',{name:'Save move',exact:true}).click();
+  await page.waitForFunction(([id,old])=>window.desktop.getState().then(s=>s.planning.blocks.find(b=>b.id===id).start!==old),[report.id,report.start]);
+  const movedBlock=(await blocks()).find(b=>b.id===report.id);
+  assert.equal(new Date(movedBlock.end)-new Date(movedBlock.start),3600000);
+
   assert.deepEqual(errors,[]);
   console.log('Planning UI smoke passed');
 } finally {await app.close();}

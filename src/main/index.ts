@@ -23,7 +23,7 @@ import { PlaneService } from "./plane";
 import { TaskCreateFailure } from "./task-create-failure";
 import { UpdateController } from "./updates";
 import { applyPlacements } from "../shared/plan-placement";
-import { approvePlan, DEFAULT_PLANNING, exportApprovedICS, generatePlan, linkChildren, parseCalendarICS, providerFor, refKey, restoreLocalCalendar, setEstimate, stashLocalCalendar } from "./planning";
+import { approvePlan, DEFAULT_PLANNING, exportApprovedICS, generatePlan, linkChildren, moveBlock, parseCalendarICS, providerFor, refKey, restoreLocalCalendar, setEstimate, stashLocalCalendar } from "./planning";
 import { AppPersistence, DEFAULT_SETTINGS, type PersistedData } from "./persistence";
 import {
   SOURCE_COLORS,
@@ -488,6 +488,7 @@ export class DesktopRuntime {
     ipcMain.handle("desktop:calendar-reconcile-operation", guarded((id,index,resolution) => this.reconcileCalendarOperation(id,index,resolution)));
     ipcMain.handle("desktop:plan-generate", guarded(() => this.generatePlanning()));
     ipcMain.handle("desktop:plan-approve", guarded((proposal, selected, placements) => this.approvePlanning(proposal, selected, placements)));
+    ipcMain.handle("desktop:plan-move-block", guarded((blockId, start) => this.moveApprovedBlock(blockId, start)));
     ipcMain.handle("desktop:calendar-export", guarded(() => exportApprovedICS(this.planning().blocks, this.state)));
     ipcMain.handle(CHANNELS.openNotion, guarded((id) => this.openNotion(id)));
   }
@@ -774,6 +775,39 @@ export class DesktopRuntime {
     const latest=this.planning();const confirmedById=new Map(latest.blocks.map(block=>[block.id,block]));
     const completed:PlanningData={...latest,blocks:desired.blocks.map(block=>confirmedById.get(block.id)?.remote?{...block,remote:confirmedById.get(block.id)!.remote}:block),calendarSync:{...latest.calendarSync!,journal}};
     this.state.planning=completed;this.persist();this.broadcast();this.planAuthority.delete(proposal.id);return this.snapshot();
+  }
+
+  private async moveApprovedBlock(blockValue: unknown, startValue: unknown): Promise<AppState> {
+    const blockId=stringValue(blockValue,"blockId"),start=stringValue(startValue,"start");
+    if (this.approvalActive) throw new Error("Another calendar approval is still being saved. Wait for it to finish.");
+    this.approvalActive = true;
+    try { return await this.performBlockMove(blockId, start); }
+    finally { this.approvalActive = false; }
+  }
+
+  /** Each move stands alone: the block changes only once the calendar confirms, and refreshes read back any uncertain write. */
+  private async performBlockMove(blockId: string, start: string): Promise<AppState> {
+    this.assertNoUnresolvedCalendarCreate();
+    if (this.planning().calendarSync?.mode === "live") await this.refreshLiveCalendars(true);
+    this.assertNoUnresolvedCalendarCreate();
+    const current=this.planning();const desired=moveBlock(current,this.state,blockId,start);
+    const moved=desired.blocks.find(block=>block.id===blockId)!;const binding=moved.remote;
+    if (!binding) { this.state.planning=desired;this.persist();this.broadcast();return this.snapshot(); }
+    const sync=current.calendarSync!;const calendar=sync.calendars.find(item=>item.provider===binding.provider&&item.id===binding.calendarId&&(item.accountId??item.id)===binding.accountId);
+    if (!calendar) throw new Error("This block's calendar is no longer available.");
+    if(calendar.provider==="google"&&this.googleOAuth&&sync.googleConnected)this.googleCalendar??=new GoogleCalendarClient({getAccessToken:()=>this.googleOAuth!.getAccessToken()});
+    if(calendar.provider==="notion"&&this.tokens.has("notion"))this.notionCalendar??=new NotionCalendarClient({getToken:()=>this.tokens.get("notion")||""});
+    const client=calendar.provider==="google"?this.googleCalendar:this.notionCalendar;if(!client)throw new Error("Reconnect this block's calendar before moving it.");
+    const task=this.state.tasks.find(t=>t.id===moved.ref.taskId&&t.sourceId===moved.ref.sourceId);
+    try {
+      const event=await client.updateEvent(calendar,binding.eventId,{installationId:sync.installationId,blockId,operationId:randomUUID(),title:task?.name||"Planned task",start:moved.start,end:moved.end,taskUrl:task?.url},binding.version);
+      const latest=this.planning();this.state.planning={...latest,blocks:latest.blocks.map(block=>block.id===blockId?{...moved,remote:{...binding,version:event.version}}:block),inputRevision:latest.inputRevision+1};
+    } catch(error) {
+      const message=toError(error).message;const uncertain=error instanceof CalendarProviderError&&error.code==="unknown-write";
+      await this.refreshLiveCalendars(true).catch(()=>undefined);
+      throw new Error(uncertain?`The calendar may have saved this move: ${message}. Refresh and check the block's time before moving it again.`:`The block was not moved: ${message}`);
+    }
+    this.persist();this.broadcast();return this.snapshot();
   }
 
   private updateCalendarOperation(operationId: string, index: number, step: NonNullable<PlanningData["calendarSync"]>["journal"][number]["steps"][number]): void {

@@ -7,6 +7,7 @@ const MINUTE_HEIGHT = 0.8;
 
 export interface WeekProposed extends WeekEntry { title: string; conflict: string | null; adjusted: boolean }
 export interface WeekFixed extends WeekEntry { title: string; allDay?: boolean }
+export interface WeekApproved extends WeekFixed { movable: boolean; pending: boolean }
 
 interface Props {
   anchor: string;
@@ -15,7 +16,7 @@ interface Props {
   startHour: number;
   endHour: number;
   events: WeekFixed[];
-  approved: WeekFixed[];
+  approved: WeekApproved[];
   proposed: WeekProposed[];
   loading: boolean;
   /** Reports why a start would conflict, without changing the draft. */
@@ -52,7 +53,12 @@ export function PlanWeekCalendar({ anchor, timezone, workdays, startHour, endHou
     onMove(dragging.id, pointerStart(event, day).start);
     setDragging(null); setHover(null);
   }
-  function nudge(event: KeyboardEvent<HTMLButtonElement>, entry: WeekProposed) {
+  function dragStart(event: DragEvent<HTMLButtonElement>, entry: WeekEntry & { title: string }) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', entry.title);
+    setDragging({ id: entry.id, minutes: DateTime.fromISO(entry.end).diff(DateTime.fromISO(entry.start), 'minutes').minutes, grabOffset: event.clientY - event.currentTarget.getBoundingClientRect().top });
+  }
+  function nudge(event: KeyboardEvent<HTMLButtonElement>, entry: WeekEntry) {
     const change = { ArrowUp: { minutes: -SNAP_MINUTES }, ArrowDown: { minutes: SNAP_MINUTES }, ArrowLeft: { days: -1 }, ArrowRight: { days: 1 } }[event.key];
     if (!change) return;
     event.preventDefault();
@@ -60,7 +66,7 @@ export function PlanWeekCalendar({ anchor, timezone, workdays, startHour, endHou
   }
 
   return <div className="plan-week" aria-busy={loading}>
-    <div className="plan-week-legend" aria-label="Calendar legend"><span className="plan-swatch event">Calendar event</span><span className="plan-swatch approved">Approved block</span><span className="plan-swatch proposed">Proposed block</span><small>Times shown in {timezone}. Drag proposed blocks, or focus one and use the arrow keys.</small></div>
+    <div className="plan-week-legend" aria-label="Calendar legend"><span className="plan-swatch event">Calendar event</span><span className="plan-swatch approved">Approved block</span><span className="plan-swatch proposed">Proposed block</span><small>Times shown in {timezone}. Drag a task block, or focus it and use the arrow keys.</small></div>
     {loading ? <div className="plan-week-loading" role="status"><LoaderCircle size={14} className="spin" />Reading calendars and building a draft…</div> : null}
     <div className="plan-week-scroll"><div className="plan-week-grid">
       <div className="plan-week-gutter"><div className="plan-week-head" />{hours.map(hour => <div className="plan-week-hour" style={{ height: 60 * MINUTE_HEIGHT }} key={hour}>{DateTime.fromObject({ hour: hour % 24 }).toFormat('h a')}</div>)}</div>
@@ -72,8 +78,10 @@ export function PlanWeekCalendar({ anchor, timezone, workdays, startHour, endHou
           <div className="plan-week-body" data-day={day.toISODate()} style={{ height: columnHeight, '--hour-height': `${60 * MINUTE_HEIGHT}px` } as CSSProperties} onDragOver={event => dragOver(event, index)} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setHover(null); }} onDrop={event => drop(event, index)}>
             {working ? <div className="plan-week-working" style={{ top: (startHour - from) * 60 * MINUTE_HEIGHT, height: (endHour - startHour) * 60 * MINUTE_HEIGHT }} /> : null}
             {layoutDay(day, timed, from, to).map(({ entry, top, height, lane, lanes }) => <div className="plan-block event" key={entry.id} style={position(top, height, lane, lanes)} title={`${entry.title}, ${clock(entry.start)}–${clock(entry.end)}`}><strong>{entry.title}</strong></div>)}
-            {layoutDay(day, approved, from, to).map(({ entry, top, height, lane, lanes }) => <div className="plan-block approved" key={entry.id} style={position(top, height, lane, lanes)} title={`Approved: ${entry.title}, ${clock(entry.start)}–${clock(entry.end)}`}><strong>{entry.title}</strong></div>)}
-            {layoutDay(day, proposed, from, to).map(({ entry, top, height, lane, lanes }) => <button type="button" draggable className={`plan-block proposed ${entry.conflict ? 'conflict' : ''} ${dragging?.id === entry.id ? 'dragging' : ''}`} key={entry.id} style={position(top, height, lane, lanes)} aria-label={`Proposed: ${entry.title}, ${day.toFormat('cccc')} ${clock(entry.start)} to ${clock(entry.end)}${entry.conflict ? `. Conflict: ${entry.conflict}` : ''}. Use arrow keys to move.`} title={entry.conflict ?? `${clock(entry.start)}–${clock(entry.end)}`} onKeyDown={event => nudge(event, entry)} onDragStart={event => { event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', entry.title); setDragging({ id: entry.id, minutes: DateTime.fromISO(entry.end).diff(DateTime.fromISO(entry.start), 'minutes').minutes, grabOffset: event.clientY - event.currentTarget.getBoundingClientRect().top }); }} onDragEnd={() => { setDragging(null); setHover(null); }}><strong>{entry.title}</strong>{height * MINUTE_HEIGHT >= 30 ? <span>{clock(entry.start)}</span> : null}</button>)}
+            {layoutDay(day, approved, from, to).map(({ entry, top, height, lane, lanes }) => entry.movable
+              ? <button type="button" draggable className={`plan-block approved movable ${entry.pending ? 'pending' : ''} ${dragging?.id === entry.id ? 'dragging' : ''}`} key={entry.id} style={position(top, height, lane, lanes)} aria-label={`${entry.pending ? 'Unsaved move' : 'Approved'}: ${entry.title}, ${day.toFormat('cccc')} ${clock(entry.start)} to ${clock(entry.end)}. Use arrow keys to move.`} title={`${clock(entry.start)}–${clock(entry.end)}`} onKeyDown={event => nudge(event, entry)} onDragStart={event => dragStart(event, entry)} onDragEnd={() => { setDragging(null); setHover(null); }}><strong>{entry.title}</strong></button>
+              : <div className="plan-block approved" key={entry.id} style={position(top, height, lane, lanes)} title={`Approved: ${entry.title}, ${clock(entry.start)}–${clock(entry.end)}`}><strong>{entry.title}</strong></div>)}
+            {layoutDay(day, proposed, from, to).map(({ entry, top, height, lane, lanes }) => <button type="button" draggable className={`plan-block proposed ${entry.conflict ? 'conflict' : ''} ${dragging?.id === entry.id ? 'dragging' : ''}`} key={entry.id} style={position(top, height, lane, lanes)} aria-label={`Proposed: ${entry.title}, ${day.toFormat('cccc')} ${clock(entry.start)} to ${clock(entry.end)}${entry.conflict ? `. Conflict: ${entry.conflict}` : ''}. Use arrow keys to move.`} title={entry.conflict ?? `${clock(entry.start)}–${clock(entry.end)}`} onKeyDown={event => nudge(event, entry)} onDragStart={event => dragStart(event, entry)} onDragEnd={() => { setDragging(null); setHover(null); }}><strong>{entry.title}</strong>{height * MINUTE_HEIGHT >= 30 ? <span>{clock(entry.start)}</span> : null}</button>)}
             {hover?.day === index && dragging ? <div className={`plan-drop-preview ${hover.conflict ? 'conflict' : ''}`} style={{ top: hover.offset * MINUTE_HEIGHT, height: dragging.minutes * MINUTE_HEIGHT }}>{hover.conflict ?? ''}</div> : null}
           </div>
         </div>;

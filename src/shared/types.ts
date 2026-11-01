@@ -109,6 +109,7 @@ export interface DesktopAPI {
   addCalendarEvent(event: Omit<CalendarEvent, 'id'>): Promise<AppState>;
   generatePlan(): Promise<PlanProposal>;
   approvePlan(proposal: PlanProposal, selected: string[], placements?: PlanPlacement[]): Promise<AppState>;
+  moveBlock(blockId: string, start: string): Promise<AppState>;
   exportCalendar(): Promise<string>;
  openNotion(id: string): Promise<void>;
  onState(callback: (state: AppState) => void): () => void;
