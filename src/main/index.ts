@@ -19,6 +19,7 @@ import { GoogleCalendarClient, GoogleOAuthClient } from "./google-calendar";
 import { NotionCalendarClient } from "./notion-calendar";
 import { refreshCalendarSnapshot } from "./calendar-sync";
 import { calendarKey, CalendarProviderError, type CalendarDefinition } from "../shared/calendar";
+import { JiraService, normalizeJiraSite } from "./jira";
 import { PlaneService } from "./plane";
 import { TaskCreateFailure } from "./task-create-failure";
 import { UpdateController } from "./updates";
@@ -50,6 +51,7 @@ import {
   type TaskRef,
   type PlanProposal,
 } from "../shared/types";
+import { PROVIDER_LABELS, sourceProvider } from "../shared/types";
 
 type Service = {
   validate(): Promise<unknown>;
@@ -61,6 +63,7 @@ type Service = {
 };
 
 type PlaneConfig = { baseUrl?: string; workspaceSlug?: string };
+type JiraConfig = { siteUrl: string; email: string };
 
 type Bounds = NonNullable<DesktopSettings["bounds"]>;
 
@@ -69,6 +72,8 @@ const CHANNELS = {
   connect: "desktop:connect",
   connectPlane: "desktop:connect-plane",
   listPlaneProjects: "desktop:list-plane-projects",
+  connectJira: "desktop:connect-jira",
+  listJiraProjects: "desktop:list-jira-projects",
   disconnect: "desktop:disconnect",
   resolveSource: "desktop:resolve-source",
   saveSource: "desktop:save-source",
@@ -151,8 +156,8 @@ export function validateSourceConfig(source: SourceConfig): void {
   const mapping = source.mapping;
   if (mapping?.owner && !isPropertyType(properties.get(mapping.owner), "people")) throw new Error(`Source ${source.name} owner mapping is no longer a people field`);
   if (!mapping || typeof mapping.title !== "string" || !mapping.title) throw new Error(`Source ${source.name} has no title mapping`);
-  if (source.provider === "plane") {
-    if (!source.workspaceSlug || !(source.projectId || source.databaseId)) throw new Error(`Source ${source.name} has incomplete Plane project metadata`);
+  if (source.provider === "plane" || source.provider === "jira") {
+    if (source.provider === "plane" && !source.workspaceSlug || !(source.projectId || source.databaseId)) throw new Error(`Source ${source.name} has incomplete project metadata`);
     if (!isPropertyType(properties.get(mapping.title), "title", "text")) throw new Error(`Source ${source.name} title mapping is invalid`);
     if (mapping.due !== null && !isPropertyType(properties.get(mapping.due), "date")) throw new Error(`Source ${source.name} due mapping is invalid`);
     const status = properties.get(mapping.status);
@@ -180,8 +185,8 @@ function sourceCandidate(value: unknown, fallback?: SourceCandidate): SourceCand
       databaseId: value.databaseId,
       name: value.name,
       properties: cleanProperties(value.properties),
-      ...((value.provider === "plane" || fallback?.provider === "plane") ? {
-        provider: "plane",
+      ...(sourceProvider(value.provider ?? fallback?.provider) !== "notion" ? {
+        provider: sourceProvider(value.provider ?? fallback?.provider),
         ...(typeof value.workspaceSlug === "string" ? { workspaceSlug: value.workspaceSlug } : fallback?.workspaceSlug ? { workspaceSlug: fallback.workspaceSlug } : {}),
         ...(typeof value.projectId === "string" ? { projectId: value.projectId } : fallback?.projectId ? { projectId: fallback.projectId } : {}),
         ...(typeof value.baseUrl === "string" ? { baseUrl: value.baseUrl } : fallback?.baseUrl ? { baseUrl: fallback.baseUrl } : {}),
@@ -210,13 +215,13 @@ function cleanProperties(value: unknown[]): PropertyInfo[] {
 
 function cleanTask(value: unknown, sourceId: string, provider: SourceProvider = "notion"): Task {
   const item = isRecord(value) && isRecord(value.task) ? value.task : value;
-  if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim() || typeof item.name !== "string") throw new Error(`${provider === "plane" ? "Plane" : "Notion"} returned an invalid task`);
+  if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim() || typeof item.name !== "string") throw new Error(`${PROVIDER_LABELS[provider]} returned an invalid task`);
   const due = taskDate(item.due, "task.due");
   return {
     id: item.id,
     sourceId,
     name: item.name,
-    url: typeof item.url === "string" ? item.url : provider === "plane" ? "" : `https://www.notion.so/${item.id.replaceAll("-", "")}`,
+    url: typeof item.url === "string" ? item.url : provider !== "notion" ? "" : `https://www.notion.so/${item.id.replaceAll("-", "")}`,
     due: due === undefined ? null : due,
     status: typeof item.status === "string" ? item.status : "",
     completed: typeof item.completed === "boolean" ? item.completed : false,
@@ -227,7 +232,7 @@ function cleanTask(value: unknown, sourceId: string, provider: SourceProvider = 
 
 function cleanTaskList(value: unknown, sourceId: string, provider: SourceProvider = "notion"): Task[] {
   const list = isRecord(value) && Array.isArray(value.tasks) ? value.tasks : value;
-  if (!Array.isArray(list)) throw new Error(`${provider === "plane" ? "Plane" : "Notion"} returned an invalid task list`);
+  if (!Array.isArray(list)) throw new Error(`${PROVIDER_LABELS[provider]} returned an invalid task list`);
   const result: Task[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -273,6 +278,15 @@ function isNotionUrl(value: string): boolean {
   }
 }
 
+function isJiraUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" && parsed.hostname.toLowerCase().endsWith(".atlassian.net");
+  } catch {
+    return false;
+  }
+}
+
 function isPlaneUrl(value: string): boolean {
   try {
     const parsed = new URL(value);
@@ -310,6 +324,7 @@ export class DesktopRuntime {
   private readonly services = new Map<SourceProvider, Service>();
   private readonly tokens = new Map<SourceProvider, string>();
   private planeConfig: PlaneConfig | null = null;
+  private jiraConfig: JiraConfig | null = null;
   private mainWindow: BrowserWindow | null = null;
   private tray: Tray | null = null;
   private refreshTimer: NodeJS.Timeout | null = null;
@@ -410,6 +425,13 @@ export class DesktopRuntime {
         this.state.connections = { ...this.state.connections, plane: { connected: false, ...config } };
       }
     }
+    this.jiraConfig = this.persistence.loadJiraConfig();
+    const jiraToken = this.persistence.loadToken("jira");
+    if (jiraToken && this.jiraConfig) {
+      this.services.set("jira", new JiraService(this.jiraConfig.email, jiraToken, globalThis.fetch, { siteUrl: this.jiraConfig.siteUrl }) as unknown as Service);
+      this.tokens.set("jira", jiraToken);
+      this.state.connections = { ...this.state.connections, jira: { connected: false, baseUrl: this.jiraConfig.siteUrl, email: this.jiraConfig.email } };
+    }
     this.registerIpc();
     this.createWindow();
     this.refreshTimer = setInterval(() => { void this.refresh(); void this.refreshLiveCalendars().catch(() => undefined); }, 60_000);
@@ -456,6 +478,8 @@ export class DesktopRuntime {
     ipcMain.handle(CHANNELS.connect, guarded((token) => this.connect(token)));
     ipcMain.handle(CHANNELS.connectPlane, guarded((input) => this.connectPlane(input)));
     ipcMain.handle(CHANNELS.listPlaneProjects, guarded((input) => this.listPlaneProjects(input)));
+    ipcMain.handle(CHANNELS.connectJira, guarded((input) => this.connectJira(input)));
+    ipcMain.handle(CHANNELS.listJiraProjects, guarded(() => this.listJiraProjects()));
     ipcMain.handle(CHANNELS.disconnect, guarded((provider) => this.disconnect(provider)));
     ipcMain.handle(CHANNELS.resolveSource, guarded((url) => this.resolveSource(url)));
     ipcMain.handle(CHANNELS.saveSource, guarded((source) => this.saveSource(source)));
@@ -508,7 +532,7 @@ export class DesktopRuntime {
 
   private planning() { return this.state.planning ?? (this.state.planning = structuredClone(DEFAULT_PLANNING)); }
   private requireTaskRef(value: unknown): TaskRef {
-    if (!isRecord(value) || !["notion", "plane"].includes(String(value.provider)) || typeof value.sourceId !== "string" || typeof value.taskId !== "string") throw new TypeError("Task reference is invalid");
+    if (!isRecord(value) || !["notion", "plane", "jira"].includes(String(value.provider)) || typeof value.sourceId !== "string" || typeof value.taskId !== "string") throw new TypeError("Task reference is invalid");
     const ref = value as unknown as TaskRef;
     if (!this.state.tasks.some(t => t.id === ref.taskId && t.sourceId === ref.sourceId) || providerFor(ref.sourceId, this.state) !== ref.provider) throw new Error("Task is unavailable in the selected source.");
     return ref;
@@ -1063,6 +1087,7 @@ export class DesktopRuntime {
   private providerForValue(value: unknown): SourceProvider {
     if (value === undefined || value === null || value === "") return "notion";
     if (value === "plane" || isRecord(value) && value.provider === "plane") return "plane";
+    if (value === "jira" || isRecord(value) && value.provider === "jira") return "jira";
     if (value === "notion" || isRecord(value) && value.provider === "notion") return "notion";
     throw new TypeError("provider is invalid");
   }
@@ -1076,6 +1101,10 @@ export class DesktopRuntime {
     if (provider === "plane") {
       this.planeConfig = null;
       this.persistence.clearPlaneConfig();
+    }
+    if (provider === "jira") {
+      this.jiraConfig = null;
+      this.persistence.clearJiraConfig();
     }
     if (provider === "notion") {
       this.planAuthority.clear();
@@ -1124,11 +1153,39 @@ export class DesktopRuntime {
     return (Array.isArray(response) ? response : []).map((item) => sourceCandidate(item)).filter((item) => item.provider === "plane");
   }
 
+  private async connectJira(value: unknown): Promise<AppState> {
+    if (!isRecord(value)) throw new TypeError("Jira connection is invalid");
+    const email = stringValue(value.email, "email").trim();
+    const apiToken = stringValue(value.apiToken, "apiToken").trim();
+    const siteUrl = normalizeJiraSite(stringValue(value.siteUrl, "siteUrl"));
+    const service = new JiraService(email, apiToken, globalThis.fetch, { siteUrl }) as unknown as Service;
+    await service.validate();
+    this.persistence.saveToken(apiToken, "jira");
+    this.persistence.saveJiraConfig({ siteUrl, email });
+    this.jiraConfig = { siteUrl, email };
+    this.services.set("jira", service);
+    this.tokens.set("jira", apiToken);
+    this.state.connected = true;
+    this.state.connections = { ...this.state.connections, jira: { connected: true, baseUrl: siteUrl, email } };
+    delete this.state.sync.errors["jira:account"];
+    this.sourceGeneration += 1;
+    this.broadcast();
+    await this.sync();
+    return this.snapshot();
+  }
+
+  private async listJiraProjects(): Promise<SourceCandidate[]> {
+    const service = this.services.get("jira");
+    if (!service || !this.state.connections?.jira?.connected) throw new Error("Connect Jira before listing projects");
+    const response = await (service as unknown as JiraService).listProjects();
+    return response.map((item) => sourceCandidate(item)).filter((item) => item.provider === "jira");
+  }
+
   private async resolveSource(value: unknown): Promise<SourceCandidate[]> {
     const url = stringValue(value, "url");
-    const provider: SourceProvider = isNotionUrl(url) ? "notion" : isPlaneUrl(url) ? "plane" : (() => { throw new Error("Only HTTPS Notion or Plane URLs can be resolved"); })();
+    const provider: SourceProvider = isNotionUrl(url) ? "notion" : isJiraUrl(url) ? "jira" : isPlaneUrl(url) ? "plane" : (() => { throw new Error("Only HTTPS Notion, Plane, or Jira URLs can be resolved"); })();
     const service = this.services.get(provider) || (provider === "notion" ? this.service : null);
-    if (!service || !this.state.connected) throw new Error(`Connect ${provider === "plane" ? "Plane" : "Notion"} before resolving a source`);
+    if (!service || !this.state.connected) throw new Error(`Connect ${PROVIDER_LABELS[provider]} before resolving a source`);
     const response = await service.resolveSource(url);
     const candidates = Array.isArray(response) ? response : isRecord(response) && Array.isArray(response.sources) ? response.sources : [];
     const seen = new Set<string>();
@@ -1140,9 +1197,9 @@ export class DesktopRuntime {
   }
 
   private async inspect(source: SourceConfig): Promise<SourceConfig> {
-    const provider = source.provider === "plane" ? "plane" : "notion";
+    const provider = sourceProvider(source.provider);
     const service = this.services.get(provider) || (provider === "notion" ? this.service : null);
-    if (!service) throw new Error(`Connect ${provider === "plane" ? "Plane" : "Notion"} before using a source`);
+    if (!service) throw new Error(`Connect ${PROVIDER_LABELS[provider]} before using a source`);
     const inspected = await service.inspectSource(source.id || source.databaseId);
     const candidate = sourceCandidate(inspected, source);
     const refreshed: SourceConfig = { ...source, ...candidate, provider: source.provider || candidate.provider, name: candidate.name || source.name, properties: candidate.properties, mapping: source.mapping };
@@ -1153,8 +1210,8 @@ export class DesktopRuntime {
   private async saveSource(value: unknown): Promise<AppState> {
     if (!isRecord(value)) throw new TypeError("source is invalid");
     const source = value as unknown as SourceConfig;
-    const provider = source.provider === "plane" ? "plane" : "notion";
-    if (!(this.services.get(provider) || (provider === "notion" ? this.service : null)) || !this.state.connected) throw new Error(`Connect ${provider === "plane" ? "Plane" : "Notion"} before saving a source`);
+    const provider = sourceProvider(source.provider);
+    if (!(this.services.get(provider) || (provider === "notion" ? this.service : null)) || !this.state.connected) throw new Error(`Connect ${PROVIDER_LABELS[provider]} before saving a source`);
     if (this.sourceWrites.has(source.id)) throw new Error("Wait for this source's task saves to finish before remapping");
     validateSourceConfig(source);
     const refreshed = await this.inspect(source);
@@ -1253,7 +1310,7 @@ export class DesktopRuntime {
         const source = await this.inspect(configured);
         const tasks = await service.listTasks(source);
         if (!this.isSyncCurrent(generation, service, source)) return;
-        const sourceTasks = cleanTaskList(tasks, source.id, source.provider === "plane" ? "plane" : "notion");
+        const sourceTasks = cleanTaskList(tasks, source.id, sourceProvider(source.provider));
         this.state.sources = this.state.sources.map((item) => item.id === source.id && (item.provider || "notion") === (source.provider || "notion") ? source : item);
         this.state.tasks = this.state.tasks.filter((task) => task.sourceId !== source.id).concat(sourceTasks);
         onlineSources.push(source.id);
@@ -1276,7 +1333,7 @@ export class DesktopRuntime {
   }
 
   private serviceForSource(source: SourceConfig): Service | null {
-    const provider = source.provider === "plane" ? "plane" : "notion";
+    const provider = sourceProvider(source.provider);
     if (this.state.connections?.[provider]?.connected === false) return null;
     return this.services.get(provider) || (provider === "notion" ? this.service : null);
   }
@@ -1306,11 +1363,11 @@ export class DesktopRuntime {
     const refreshed = await this.inspect(source);
     if (!this.isSyncCurrent(this.sourceGeneration, service, source) || !this.state.sources.some(item => item.id === sourceId)) throw new Error("The connection or source changed; refresh before creating a task");
     const created = await service.createTask(refreshed, name, due);
-    if (!this.isSyncCurrent(this.sourceGeneration, service, source) || !this.state.sources.some(item => item.id === sourceId)) throw new Error(`The task was created in ${source.provider === "plane" ? "Plane" : "Notion"}, but its source was disconnected. Reconnect to view it`);
+    if (!this.isSyncCurrent(this.sourceGeneration, service, source) || !this.state.sources.some(item => item.id === sourceId)) throw new Error(`The task was created in ${PROVIDER_LABELS[sourceProvider(source.provider)]}, but its source was disconnected. Reconnect to view it`);
     this.sourceGeneration += 1;
     this.state.sync.syncing = false;
     // The created page's ID is authoritative; task names are never identities.
-    const task = cleanTask(created, sourceId, source.provider === "plane" ? "plane" : "notion");
+    const task = cleanTask(created, sourceId, sourceProvider(source.provider));
     if (!this.state.tasks.some((item) => item.sourceId === sourceId && item.id === task.id)) this.state.tasks.push(task);
     if (favorite && !this.state.stars.includes(task.id)) this.state.stars.push(task.id);
     this.state.sources = this.state.sources.map((item) => item.id === sourceId ? refreshed : item);
@@ -1377,7 +1434,7 @@ export class DesktopRuntime {
       this.sourceGeneration += 1;
       this.state.sync.syncing = false;
       const conflict = isRecord(response) && response.conflict === true;
-      const task = cleanTask(response, source.id, source.provider === "plane" ? "plane" : "notion");
+      const task = cleanTask(response, source.id, sourceProvider(source.provider));
       this.replaceTask(task);
       this.persist();
       this.broadcast();
@@ -1388,13 +1445,13 @@ export class DesktopRuntime {
       if (!current) {
         try {
           const listed = await service.listTasks(source);
-          current = cleanTaskList(listed, source.id, source.provider === "plane" ? "plane" : "notion").find((item) => item.id === id);
+          current = cleanTaskList(listed, source.id, sourceProvider(source.provider)).find((item) => item.id === id);
         } catch {
           // Preserve the original conflict response when the refresh itself is unavailable.
         }
       }
       if (!current) throw error;
-      const normalized = cleanTask(current, source.id, source.provider === "plane" ? "plane" : "notion");
+      const normalized = cleanTask(current, source.id, sourceProvider(source.provider));
       this.replaceTask(normalized);
       this.persist();
       this.broadcast();
@@ -1493,8 +1550,8 @@ export class DesktopRuntime {
   private async openNotion(value: unknown): Promise<void> {
     const id = stringValue(value, "id");
     const knownTask = this.state.tasks.find((task) => task.id === id);
-    const target = knownTask && (isNotionUrl(knownTask.url) || isPlaneUrl(knownTask.url)) ? knownTask.url : null;
-    if (!target) throw new Error("Only a known Notion or Plane task ID can be opened");
+    const target = knownTask && (isNotionUrl(knownTask.url) || isPlaneUrl(knownTask.url) || isJiraUrl(knownTask.url)) ? knownTask.url : null;
+    if (!target) throw new Error("Only a known Notion, Plane, or Jira task ID can be opened");
     await shell.openExternal(target);
   }
 }

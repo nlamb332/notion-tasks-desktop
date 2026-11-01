@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { safeStorage } from "electron";
-import { cleanTaskOwners } from "../shared/types";
+import { cleanTaskOwners, sourceProvider } from "../shared/types";
 import { SOURCE_COLORS, type AppState, type DesktopSettings, type SourceColor, type SourceConfig, type SourceProvider, type Task, type ThemePreference } from "../shared/types";
 import { cleanPlanning, DEFAULT_PLANNING } from "./planning";
 import type { GoogleOAuthCredentials } from "./google-calendar";
@@ -80,13 +80,13 @@ function cleanSources(value: unknown): SourceConfig[] {
       isRecord(property) && typeof property.id === "string" && typeof property.name === "string" && typeof property.type === "string",
     );
     seen.add(item.id);
-    const provider: SourceProvider = item.provider === "plane" ? "plane" : "notion";
+    const provider = sourceProvider(item.provider);
     result.push({
       id: item.id,
       databaseId: item.databaseId,
       name: item.name,
       properties,
-      ...(provider === "plane" ? {
+      ...(provider !== "notion" ? {
         provider,
         ...(typeof item.workspaceSlug === "string" ? { workspaceSlug: item.workspaceSlug } : {}),
         ...(typeof item.projectId === "string" ? { projectId: item.projectId } : {}),
@@ -142,6 +142,8 @@ export class AppPersistence {
   private readonly tokenPath: string;
   private readonly planeTokenPath: string;
   private readonly planeConfigPath: string;
+  private readonly jiraTokenPath: string;
+  private readonly jiraConfigPath: string;
   private readonly googleCalendarCredentialsPath: string;
 
   constructor(private readonly directory: string) {
@@ -149,6 +151,8 @@ export class AppPersistence {
     this.tokenPath = path.join(directory, "notion-token.enc");
     this.planeTokenPath = path.join(directory, "plane-token.enc");
     this.planeConfigPath = path.join(directory, "plane-config.json");
+    this.jiraTokenPath = path.join(directory, "jira-token.enc");
+    this.jiraConfigPath = path.join(directory, "jira-config.json");
     this.googleCalendarCredentialsPath = path.join(directory, "google-calendar-credentials.enc");
   }
 
@@ -186,10 +190,14 @@ export class AppPersistence {
     fs.renameSync(temporaryPath, this.statePath);
   }
 
+  private tokenPathFor(provider: SourceProvider): string {
+    return provider === "plane" ? this.planeTokenPath : provider === "jira" ? this.jiraTokenPath : this.tokenPath;
+  }
+
   loadToken(provider: SourceProvider = "notion"): string | null {
     try {
       if (!safeStorage.isEncryptionAvailable()) return null;
-      const encrypted = fs.readFileSync(provider === "plane" ? this.planeTokenPath : this.tokenPath);
+      const encrypted = fs.readFileSync(this.tokenPathFor(provider));
       return safeStorage.decryptString(encrypted) || null;
     } catch {
       return null;
@@ -200,7 +208,7 @@ export class AppPersistence {
     if (!safeStorage.isEncryptionAvailable()) return false;
     fs.mkdirSync(this.directory, { recursive: true });
     const encrypted = safeStorage.encryptString(token);
-    const targetPath = provider === "plane" ? this.planeTokenPath : this.tokenPath;
+    const targetPath = this.tokenPathFor(provider);
     const temporaryPath = `${targetPath}.${process.pid}.tmp`;
     fs.writeFileSync(temporaryPath, encrypted, { mode: 0o600 });
     fs.renameSync(temporaryPath, targetPath);
@@ -208,7 +216,7 @@ export class AppPersistence {
   }
 
   clearToken(provider: SourceProvider = "notion"): void {
-    const targetPath = provider === "plane" ? this.planeTokenPath : this.tokenPath;
+    const targetPath = this.tokenPathFor(provider);
     try {
       fs.unlinkSync(targetPath);
     } catch (error) {
@@ -238,6 +246,31 @@ export class AppPersistence {
   clearPlaneConfig(): void {
     try {
       fs.unlinkSync(this.planeConfigPath);
+    } catch (error) {
+      const code = isRecord(error) ? error.code : undefined;
+      if (code !== "ENOENT") throw error;
+    }
+  }
+
+  loadJiraConfig(): { siteUrl: string; email: string } | null {
+    try {
+      const raw = JSON.parse(fs.readFileSync(this.jiraConfigPath, "utf8")) as Record<string, unknown>;
+      return typeof raw.siteUrl === "string" && typeof raw.email === "string" ? { siteUrl: raw.siteUrl, email: raw.email } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  saveJiraConfig(config: { siteUrl: string; email: string }): void {
+    fs.mkdirSync(this.directory, { recursive: true });
+    const temporaryPath = `${this.jiraConfigPath}.${process.pid}.tmp`;
+    fs.writeFileSync(temporaryPath, JSON.stringify(config), { encoding: "utf8", mode: 0o600 });
+    fs.renameSync(temporaryPath, this.jiraConfigPath);
+  }
+
+  clearJiraConfig(): void {
+    try {
+      fs.unlinkSync(this.jiraConfigPath);
     } catch (error) {
       const code = isRecord(error) ? error.code : undefined;
       if (code !== "ENOENT") throw error;

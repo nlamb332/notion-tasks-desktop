@@ -1,11 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
-import { SOURCE_COLORS, type AppState, type AppUpdateState, type BreakdownStep, type CalendarEvent, type ConnectionConfig, type DesktopAPI, type PlanPlacement, PlanProposal, type PlaneConnectionInput, type PlanningSettings, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type TaskRef, type UpdateResult } from "./shared/types";
+import { SOURCE_COLORS, type AppState, type AppUpdateState, type BreakdownStep, type CalendarEvent, type ConnectionConfig, type DesktopAPI, type JiraConnectionInput, type PlanPlacement, PlanProposal, type PlaneConnectionInput, type PlanningSettings, type SourceColor, type SourceConfig, type Task, type TaskChanges, type TaskDate, type TaskRef, type UpdateResult } from "./shared/types";
 
 const channels = {
   getState: "desktop:get-state",
   connect: "desktop:connect",
   connectPlane: "desktop:connect-plane",
   listPlaneProjects: "desktop:list-plane-projects",
+  connectJira: "desktop:connect-jira",
+  listJiraProjects: "desktop:list-jira-projects",
   disconnect: "desktop:disconnect",
   resolveSource: "desktop:resolve-source",
   saveSource: "desktop:save-source",
@@ -48,6 +50,12 @@ function ensurePlaneConnection(value: unknown): PlaneConnectionInput {
   };
   if (input.baseUrl !== undefined) result.baseUrl = ensureString(input.baseUrl, "baseUrl");
   return result;
+}
+
+function ensureJiraConnection(value: unknown): JiraConnectionInput {
+  if (typeof value !== "object" || value === null) throw new TypeError("Jira connection is invalid");
+  const input = value as Record<string, unknown>;
+  return { email: ensureString(input.email, "email"), apiToken: ensureString(input.apiToken, "apiToken"), siteUrl: ensureString(input.siteUrl, "siteUrl") };
 }
 
 function ensureSourceColor(value: unknown): SourceColor {
@@ -93,6 +101,8 @@ const desktop: DesktopAPI = {
     ...(workspaceSlug === undefined ? {} : { workspaceSlug: ensureString(workspaceSlug, "workspaceSlug") }),
     ...(baseUrl === undefined ? {} : { baseUrl: ensureString(baseUrl, "baseUrl") }),
   }),
+  connectJira: (input) => ipcRenderer.invoke(channels.connectJira, ensureJiraConnection(input)),
+  listJiraProjects: () => ipcRenderer.invoke(channels.listJiraProjects),
   disconnect: (provider) => ipcRenderer.invoke(channels.disconnect, provider),
   resolveSource: (url) => ipcRenderer.invoke(channels.resolveSource, ensureString(url, "url")),
   saveSource: (source: SourceConfig) => ipcRenderer.invoke(channels.saveSource, source),
